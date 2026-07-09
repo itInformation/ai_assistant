@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 1 — 工程基础已完成
+> 当前进度：Phase 2 — DashScope LLM 封装已完成
 
 ## 快速开始
 
@@ -14,8 +14,21 @@ uv sync --all-groups
 uv run ai-assistant
 ```
 
-首次运行不需要 API Key。CLI 会加载类型安全配置、初始化结构化日志，并输出
-应用健康信息。真实 DashScope 调用将在 Phase 2 接入。
+不配置 API Key 时，可运行本地健康检查：
+
+```bash
+uv run ai-assistant
+# 或
+uv run ai-assistant health
+```
+
+调用百炼前，在 `.env` 中填写从阿里云百炼控制台获取的
+`DASHSCOPE_API_KEY`。普通聊天与增量流式聊天分别运行：
+
+```bash
+uv run ai-assistant chat "用三句话介绍 RAG"
+uv run ai-assistant chat "用三句话介绍 RAG" --stream
+```
 
 常用质量检查命令：
 
@@ -27,6 +40,16 @@ uv run pytest
 
 配置优先从环境变量读取，本地可通过 `.env` 覆盖。`.env` 已被 Git 忽略，
 可提交的变量示例位于 `.env.example`。
+
+### LLM 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `DASHSCOPE_API_KEY` | 无 | 百炼 API Key，聊天调用必填 |
+| `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 百炼 OpenAI-compatible API 地址 |
+| `DASHSCOPE_CHAT_MODEL` | `qwen-plus` | 默认聊天模型 |
+| `DASHSCOPE_TIMEOUT_SECONDS` | `30` | 单次请求超时秒数 |
+| `DASHSCOPE_MAX_RETRIES` | `2` | 首次调用之外的最大重试次数 |
 
 ## 项目目标
 
@@ -110,6 +133,17 @@ Planner → Retriever → Tool → Reviewer → Answer
 - LangChain 用于复用成熟的文档和模型生态能力，不让领域逻辑直接依赖其具体实现。
 - LangGraph 用于有状态、可分支、可检查点的 Agent 工作流；普通线性流程保持为简单 Python 服务。
 - 不引入 LlamaIndex，避免在同一阶段叠加功能重合的 RAG 框架和认知成本。
+
+### LLM 抽象边界
+
+应用层只依赖自有 `ChatModel` 协议及 `ChatMessage`、`ChatResponse`、
+`ChatChunk` 等领域模型。`DashScopeChatModel` 是基础设施适配器，OpenAI SDK
+仅用于调用百炼官方 OpenAI-compatible API，不会渗透到业务接口。未来接入
+OpenAI、DeepSeek 或 Claude 时，只需新增适配器，无需修改调用方。
+
+重试仅覆盖连接失败、超时、限流和服务端错误，采用有限指数退避。SDK 内建重试
+被关闭，避免两层重试叠加。流式请求在建立连接前可以重试；一旦已经向调用方
+输出 chunk，发生异常时不会自动重放，以免产生重复内容。
 
 ## 整体架构
 
@@ -242,5 +276,18 @@ Phase 1 已完成：
 - 配置 Ruff、Black、pytest 与覆盖率报告，并为配置、日志、应用和 CLI
   提供单元测试。
 
-下一阶段是 Phase 2：定义 LLM 端口并接入 DashScope，支持普通聊天、流式输出、
-超时和重试。
+Phase 2 已完成：
+
+- 定义供应商无关的 `ChatModel` 协议和聊天领域模型。
+- 通过百炼 OpenAI-compatible API 实现异步 `DashScopeChatModel`。
+- 支持完整聊天、增量流式输出和 Token Usage 映射。
+- 支持可配置超时、有限指数退避重试和统一异常转换。
+- 提供普通与流式最小聊天 CLI Demo，并通过 Fake Client 完成离线单元测试。
+
+下一阶段是 Phase 3：Prompt 模板、Few-shot、结构化输出、Output Parser 和
+Prompt 版本管理。
+
+## 参考资料
+
+- [阿里云百炼 OpenAI-compatible Chat 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
+- [阿里云百炼流式输出文档](https://help.aliyun.com/zh/model-studio/stream)
