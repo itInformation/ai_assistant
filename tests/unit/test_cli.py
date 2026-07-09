@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 
 from enterprise_ai_assistant import cli
 from enterprise_ai_assistant.config import Settings
@@ -12,7 +13,10 @@ from enterprise_ai_assistant.models import (
     ChatResponse,
     EmbeddingResponse,
     EmbeddingUsage,
+    RerankItem,
+    RerankResponse,
     ResponseFormat,
+    RetrievalCandidate,
     VectorDeleteResult,
     VectorInsertResult,
     VectorRecord,
@@ -82,6 +86,7 @@ class FakeVectorStore:
     def __init__(self) -> None:
         self.records: Sequence[VectorRecord] = ()
         self.deleted_ids: Sequence[str] = ()
+        self.deleted_document_id: str | None = None
 
     async def ensure_collection(self) -> None:
         """Satisfy collection initialization."""
@@ -104,6 +109,15 @@ class FakeVectorStore:
         self.deleted_ids = ids
         return VectorDeleteResult(deleted_count=len(ids))
 
+    async def delete_by_document_id(
+        self,
+        document_id: str,
+    ) -> VectorDeleteResult:
+        """Record document-level replacement deletion."""
+
+        self.deleted_document_id = document_id
+        return VectorDeleteResult(deleted_count=0)
+
     async def search(
         self,
         query_vector: Sequence[float],
@@ -113,7 +127,7 @@ class FakeVectorStore:
     ) -> tuple[VectorSearchResult, ...]:
         """Return one deterministic search result."""
 
-        record = self.records[1]
+        record = self.records[min(1, len(self.records) - 1)]
         return (
             VectorSearchResult(
                 id=record.id,
@@ -128,6 +142,29 @@ class FakeVectorStore:
 
     async def close(self) -> None:
         """Satisfy the vector-store lifecycle."""
+
+
+class FakeReranker:
+    """Return candidates in their current order."""
+
+    async def rerank(
+        self,
+        query: str,
+        candidates: Sequence[RetrievalCandidate],
+        *,
+        top_n: int,
+    ) -> RerankResponse:
+        """Assign deterministic relevance scores."""
+
+        return RerankResponse(
+            items=tuple(
+                RerankItem(candidate=item, score=0.9) for item in candidates[:top_n]
+            ),
+            model="fake-rerank",
+        )
+
+    async def close(self) -> None:
+        """Satisfy the reranker lifecycle."""
 
 
 def test_main_prints_structured_application_info(
@@ -276,3 +313,66 @@ def test_run_vectorstore_demo_covers_insert_search_delete(
     assert output["deleted_count"] == 3
     assert output["results"][0]["score"] == 0.9
     assert tuple(store.deleted_ids) == tuple(record.id for record in store.records)
+
+
+def test_run_ingestion_demo_indexes_markdown(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    """Ingestion CLI should parse, embed, and persist a source document."""
+
+    path = tmp_path / "manual.md"
+    path.write_text("退款将在三个工作日内到账。", encoding="utf-8")
+    store = FakeVectorStore()
+    asyncio.run(
+        cli.run_ingestion_demo(
+            Settings(
+                _env_file=None,
+                dashscope_embedding_dimensions=2,
+            ),
+            path,
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=store,
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["chunk_count"] == 1
+    assert output["inserted_count"] == 1
+    assert store.records[0].content == "退款将在三个工作日内到账。"
+
+
+def test_run_rag_demo_returns_sources(capsys: object) -> None:
+    """RAG CLI should return a grounded answer and source metadata."""
+
+    store = FakeVectorStore()
+    store.records = (
+        VectorRecord(
+            id="doc-1-0",
+            document_id="doc-1",
+            content="退款将在三个工作日内到账。",
+            embedding=(1.0, 0.0),
+            source="manual.md",
+            chunk_index=0,
+            metadata={"page_number": 1},
+        ),
+    )
+    asyncio.run(
+        cli.run_rag_demo(
+            Settings(
+                _env_file=None,
+                dashscope_embedding_dimensions=2,
+                rag_initial_top_k=1,
+                rag_final_top_k=1,
+            ),
+            "退款多久到账?",
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=store,
+            reranker=FakeReranker(),
+            chat_model=FakeChatModel(),
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["retrieved_count"] == 1
+    assert output["sources"][0]["source"] == "manual.md"

@@ -1,5 +1,8 @@
 """Tests for environment-backed application settings."""
 
+import pytest
+from pydantic import ValidationError
+
 from enterprise_ai_assistant.config import Settings
 
 
@@ -18,6 +21,11 @@ def test_settings_have_safe_defaults(monkeypatch: object) -> None:
     assert settings.dashscope_max_retries == 2
     assert settings.milvus_uri == "milvus/knowledge.db"
     assert settings.milvus_collection_name == "knowledge_chunks"
+    assert settings.dashscope_rerank_model == "qwen3-rerank"
+    assert settings.rag_chunk_size == 800
+    assert settings.rag_chunk_overlap == 120
+    assert settings.rag_initial_top_k == 20
+    assert settings.rag_final_top_k == 5
 
 
 def test_settings_read_environment(monkeypatch: object) -> None:
@@ -42,3 +50,19 @@ def test_settings_support_legacy_dashscope_model_name(
     settings = Settings(_env_file=None)
 
     assert settings.dashscope_chat_model == "qwen-turbo"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"rag_chunk_size": 100, "rag_chunk_overlap": 100},
+        {"rag_initial_top_k": 5, "rag_final_top_k": 6},
+    ],
+)
+def test_settings_reject_invalid_rag_relationships(
+    values: dict[str, int],
+) -> None:
+    """Cross-field RAG constraints should fail at application startup."""
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)

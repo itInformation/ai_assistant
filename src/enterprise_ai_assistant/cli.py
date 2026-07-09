@@ -6,6 +6,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict
 from math import sqrt
+from pathlib import Path
 from uuid import uuid4
 
 from enterprise_ai_assistant.app import run_demo
@@ -29,6 +30,17 @@ from enterprise_ai_assistant.prompt import (
 from enterprise_ai_assistant.prompt.examples import (
     SupportTicketClassification,
     build_support_classification_prompt,
+)
+from enterprise_ai_assistant.rag import (
+    IngestionService,
+    RagService,
+    TextChunker,
+    VectorRetriever,
+    create_document_loader_registry,
+)
+from enterprise_ai_assistant.rerank import (
+    Reranker,
+    create_dashscope_reranker,
 )
 from enterprise_ai_assistant.vectorstore import (
     VectorStore,
@@ -78,6 +90,16 @@ def build_parser() -> argparse.ArgumentParser:
         default="如何使用向量数据库检索企业文档?",
         help="用于相似度检索的问题",
     )
+    ingest_parser = subparsers.add_parser(
+        "ingest",
+        help="解析并索引 PDF、DOCX 或 Markdown 文档",
+    )
+    ingest_parser.add_argument("path", type=Path, help="需要摄取的文档路径")
+    rag_parser = subparsers.add_parser(
+        "rag",
+        help="检索、精排并回答企业知识问题",
+    )
+    rag_parser.add_argument("question", help="需要从知识库回答的问题")
     return parser
 
 
@@ -253,6 +275,79 @@ async def run_vectorstore_demo(
     print(json.dumps(output, ensure_ascii=False, indent=2))
 
 
+async def run_ingestion_demo(
+    settings: Settings,
+    path: Path,
+    *,
+    embedding_model: EmbeddingModel | None = None,
+    vector_store: VectorStore | None = None,
+) -> None:
+    """Run the Phase 6 document ingestion pipeline."""
+
+    embedder = embedding_model or create_dashscope_embedding_model(settings)
+    store = vector_store or create_milvus_vector_store(settings)
+    owns_store = vector_store is None
+    service = IngestionService(
+        loaders=create_document_loader_registry(
+            max_file_size_mb=settings.rag_max_file_size_mb
+        ),
+        chunker=TextChunker(
+            chunk_size=settings.rag_chunk_size,
+            overlap=settings.rag_chunk_overlap,
+        ),
+        embedding_model=embedder,
+        vector_store=store,
+        embedding_batch_size=settings.rag_embedding_batch_size,
+        insert_batch_size=settings.rag_insert_batch_size,
+    )
+    try:
+        result = await service.ingest(path)
+    finally:
+        if owns_store:
+            await store.close()
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
+async def run_rag_demo(
+    settings: Settings,
+    question: str,
+    *,
+    embedding_model: EmbeddingModel | None = None,
+    vector_store: VectorStore | None = None,
+    reranker: Reranker | None = None,
+    chat_model: ChatModel | None = None,
+) -> None:
+    """Run the complete Phase 6 retrieval and grounded answer pipeline."""
+
+    embedder = embedding_model or create_dashscope_embedding_model(settings)
+    store = vector_store or create_milvus_vector_store(settings)
+    ranker = reranker or create_dashscope_reranker(settings)
+    model = chat_model or create_dashscope_chat_model(settings)
+    owns_store = vector_store is None
+    owns_reranker = reranker is None
+    service = RagService(
+        retriever=VectorRetriever(
+            embedding_model=embedder,
+            vector_store=store,
+            default_top_k=settings.rag_initial_top_k,
+        ),
+        reranker=ranker,
+        chat_model=model,
+        initial_top_k=settings.rag_initial_top_k,
+        final_top_k=settings.rag_final_top_k,
+        max_context_chars=settings.rag_max_context_chars,
+        max_answer_tokens=settings.rag_max_answer_tokens,
+    )
+    try:
+        result = await service.answer(question)
+    finally:
+        if owns_reranker:
+            await ranker.close()
+        if owns_store:
+            await store.close()
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -293,6 +388,22 @@ def main(argv: Sequence[str] | None = None) -> None:
             run_vectorstore_demo(
                 settings,
                 args.query,
+            )
+        )
+        return
+    if args.command == "ingest":
+        asyncio.run(
+            run_ingestion_demo(
+                settings,
+                args.path,
+            )
+        )
+        return
+    if args.command == "rag":
+        asyncio.run(
+            run_rag_demo(
+                settings,
+                args.question,
             )
         )
         return

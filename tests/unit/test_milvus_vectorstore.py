@@ -29,7 +29,9 @@ class FakeMilvusClient:
         self.created: dict[str, Any] | None = None
         self.inserted: list[dict[str, Any]] = []
         self.deleted_ids: list[str] = []
+        self.deleted_filter: str | None = None
         self.search_request: dict[str, Any] | None = None
+        self.loaded_collection: str | None = None
         self.closed = False
 
     def has_collection(self, **kwargs: Any) -> bool:
@@ -58,6 +60,11 @@ class FakeMilvusClient:
         self.created = kwargs
         self.exists = True
 
+    def load_collection(self, **kwargs: Any) -> None:
+        """Record the collection loaded for cross-process search."""
+
+        self.loaded_collection = kwargs["collection_name"]
+
     def insert(self, **kwargs: Any) -> dict[str, Any]:
         """Record entities and return their primary keys."""
 
@@ -70,6 +77,9 @@ class FakeMilvusClient:
     def delete(self, **kwargs: Any) -> dict[str, int] | list[str]:
         """Record exact primary-key deletion."""
 
+        if "filter" in kwargs:
+            self.deleted_filter = kwargs["filter"]
+            return {"delete_count": 3}
         self.deleted_ids = kwargs["ids"]
         if self.lite_delete_result:
             return self.deleted_ids
@@ -148,6 +158,18 @@ def test_ensure_collection_creates_explicit_schema_and_index() -> None:
     index = client.created["index_params"][0].to_dict()
     assert index["index_type"] == "FLAT"
     assert index["metric_type"] == "COSINE"
+    assert client.loaded_collection == "knowledge_chunks"
+
+
+def test_ensure_collection_loads_existing_collection() -> None:
+    """A fresh process must load a persistent collection before searching."""
+
+    client = FakeMilvusClient(exists=True)
+    store = build_store(client)
+
+    asyncio.run(store.ensure_collection())
+
+    assert client.loaded_collection == "knowledge_chunks"
 
 
 def test_existing_collection_dimension_is_validated() -> None:
@@ -235,6 +257,18 @@ def test_delete_normalizes_milvus_lite_primary_key_result() -> None:
     result = asyncio.run(store.delete(["doc-1-0", "doc-2-0"]))
 
     assert result.deleted_count == 2
+
+
+def test_delete_by_document_id_builds_escaped_filter() -> None:
+    """Document replacement should build a safe exact-match expression."""
+
+    client = FakeMilvusClient(exists=True)
+    store = build_store(client)
+
+    result = asyncio.run(store.delete_by_document_id('doc-"1'))
+
+    assert result.deleted_count == 3
+    assert client.deleted_filter == 'document_id == "doc-\\"1"'
 
 
 def test_search_validates_query_and_top_k() -> None:

@@ -107,6 +107,13 @@ class MilvusVectorStore:
                     self._validate_collection(description)
                 else:
                     await asyncio.to_thread(self._create_collection)
+                # Persistent collections can be released when the previous
+                # client exits. Load explicitly so a fresh process can search.
+                await asyncio.to_thread(
+                    self._client.load_collection,
+                    collection_name=self._collection_name,
+                    timeout=self._timeout_seconds,
+                )
             except MilvusException as exc:
                 raise self._provider_error("ensure_collection", exc) from exc
             self._collection_ready = True
@@ -160,12 +167,34 @@ class MilvusVectorStore:
             )
         except MilvusException as exc:
             raise self._provider_error("delete", exc) from exc
+        return VectorDeleteResult(deleted_count=self._deleted_count(result))
+
+    async def delete_by_document_id(
+        self,
+        document_id: str,
+    ) -> VectorDeleteResult:
+        """Delete all existing chunks before a document is re-indexed."""
+
+        if not document_id.strip():
+            raise ValueError("document_id must not be empty")
+        await self.ensure_collection()
+        expression = f"document_id == {json.dumps(document_id, ensure_ascii=False)}"
+        try:
+            result = await asyncio.to_thread(
+                self._client.delete,
+                collection_name=self._collection_name,
+                filter=expression,
+                timeout=self._timeout_seconds,
+            )
+        except MilvusException as exc:
+            raise self._provider_error("delete_by_document_id", exc) from exc
+        return VectorDeleteResult(deleted_count=self._deleted_count(result))
+
+    @staticmethod
+    def _deleted_count(result: Any) -> int:
         # Remote Milvus returns {"delete_count": n}; Milvus Lite 3.0 returns
         # the deleted primary-key list. Normalize both behind the port.
-        deleted_count = (
-            int(result["delete_count"]) if isinstance(result, dict) else len(result)
-        )
-        return VectorDeleteResult(deleted_count=deleted_count)
+        return int(result["delete_count"]) if isinstance(result, dict) else len(result)
 
     async def search(
         self,

@@ -34,6 +34,14 @@ class VectorStore(Protocol):
 
         ...
 
+    async def delete_by_document_id(
+        self,
+        document_id: str,
+    ) -> VectorDeleteResult:
+        """Delete all chunks belonging to one logical document."""
+
+        ...
+
     async def search(
         self,
         query_vector: Sequence[float],

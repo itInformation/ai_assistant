@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 5 — Milvus Lite 向量存储已完成
+> 当前进度：Phase 6 — 文档摄取与完整 RAG 链路已完成
 
 ## 快速开始
 
@@ -52,6 +52,16 @@ uv run ai-assistant vector-demo "如何用向量数据库检索企业文档？"
 Demo 写入的记录使用唯一 ID，并在搜索结束后按 ID 精确删除；Collection 和本地
 数据库文件会保留，方便验证持久化与后续阶段复用。
 
+摄取 PDF、Word 或 Markdown 文档，再基于已入库的知识进行问答：
+
+```bash
+uv run ai-assistant ingest docs/employee-handbook.pdf
+uv run ai-assistant rag "员工年假如何申请？"
+```
+
+摄取同一路径的新版文档时，会以稳定的 `document_id` 替换其旧 Chunk，避免重复
+召回。PDF 当前支持包含文本层的文件；扫描件需要先经过 OCR。
+
 常用质量检查命令：
 
 ```bash
@@ -72,12 +82,28 @@ uv run pytest
 | `DASHSCOPE_CHAT_MODEL` | `qwen-plus` | 默认聊天模型；兼容已有的 `DASHSCOPE_MODEL` |
 | `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v3` | 默认文本向量模型 |
 | `DASHSCOPE_EMBEDDING_DIMENSIONS` | `1024` | 输出向量维度 |
+| `DASHSCOPE_RERANK_URL` | `https://dashscope.aliyuncs.com/compatible-api/v1/reranks` | 百炼文本重排地址 |
+| `DASHSCOPE_RERANK_MODEL` | `qwen3-rerank` | 默认重排模型 |
 | `DASHSCOPE_TIMEOUT_SECONDS` | `30` | 单次请求超时秒数 |
 | `DASHSCOPE_MAX_RETRIES` | `2` | 首次调用之外的最大重试次数 |
 | `MILVUS_URI` | `milvus/knowledge.db` | Lite 文件路径或远端 Milvus URI |
 | `MILVUS_TOKEN` | 无 | 远端 Milvus/Zilliz Cloud 凭据 |
 | `MILVUS_COLLECTION_NAME` | `knowledge_chunks` | 文档 Chunk Collection |
 | `MILVUS_TIMEOUT_SECONDS` | `30` | Milvus 操作超时秒数 |
+
+### RAG 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `RAG_CHUNK_SIZE` | `800` | 单个 Chunk 的目标字符数 |
+| `RAG_CHUNK_OVERLAP` | `120` | 相邻 Chunk 的重叠字符数 |
+| `RAG_EMBEDDING_BATCH_SIZE` | `10` | 每批 Embedding 文本数 |
+| `RAG_INSERT_BATCH_SIZE` | `100` | 每批写入 Milvus 的记录数 |
+| `RAG_INITIAL_TOP_K` | `20` | 向量召回候选数 |
+| `RAG_FINAL_TOP_K` | `5` | Rerank 后保留的上下文数 |
+| `RAG_MAX_CONTEXT_CHARS` | `8000` | 交给 LLM 的上下文字符上限 |
+| `RAG_MAX_ANSWER_TOKENS` | `1200` | 回答最大 Token 数 |
+| `RAG_MAX_FILE_SIZE_MB` | `20` | 单个摄取文件大小上限 |
 
 ## 项目目标
 
@@ -321,11 +347,19 @@ v3 的检索效果最好，适合作为首版准确率基线；维度越高，Mi
 
 ### Chunk 策略
 
-初始候选值为 800 个中文字符、120 字符 overlap。它在语义完整性、召回粒度和模型上下文成本之间取得可解释的平衡。Phase 6 将通过文档类型、检索命中率和回答评测验证，而不是把经验值直接当作最终值。
+默认采用 800 个字符、120 字符 overlap。800 字符通常足以保留一个中文段落的
+局部语义，又不会让单个命中携带过多无关内容；120 字符重叠用于降低答案跨越
+切分边界时的信息损失。切分器会优先在标题、空行和句末等自然边界结束，而不是
+机械截断。这些值是可配置的工程基线，生产环境仍应通过真实问答集评测调整。
 
 ### 检索策略
 
-第一阶段采用向量 TopK 召回，再通过 Rerank 精排。向量检索负责高召回，Rerank 负责更准确地比较问题与候选段落，避免把全部候选直接交给 LLM 造成噪声和 Token 浪费。
+第一阶段使用 `text-embedding-v3` 的 1024 维向量从 Milvus 召回 Top 20，以
+较宽候选集优先保证召回率；随后用 `qwen3-rerank` 对问题和候选原文进行交叉
+语义比较，只保留 Top 5。Retriever 擅长从大规模语料快速缩小范围，Rerank
+计算更贵但排序更准确，两阶段结合可以减少 LLM 噪声和 Token 消耗。最终 Prompt
+把检索内容视为不可信数据，要求回答只依据上下文并使用 `[来源N]` 引用；上下文
+不足时明确拒答，不让模型用参数知识补齐企业事实。
 
 ### 供应商抽象
 
@@ -413,8 +447,18 @@ Phase 5 已完成：
 - 通过真实 Milvus Lite 集成测试验证 Collection、Insert、Filter、Search、
   Delete 和持久化文件。
 
-下一阶段是 Phase 6：PDF、Word、Markdown 摄取、Chunk、Retriever、Rerank
-和完整 RAG 回答。
+Phase 6 已完成：
+
+- 实现 PDF、Word、Markdown Loader，并保留页码、文件哈希和来源等 Metadata。
+- 实现自然边界优先的可重叠 Chunk，以及 Embedding、Milvus 分批写入和同路径
+  文档的幂等替换。
+- 实现向量 Top 20 召回、百炼 `qwen3-rerank` Top 5 精排和上下文长度控制。
+- 实现带来源引用、上下文不足拒答和 Prompt Injection 防护的 RAG 回答。
+- 增加 Loader、Chunk、摄取、Retriever、Rerank、RAG Service 单元测试，以及
+  Markdown 到 Milvus Lite 再到回答的离线集成测试。
+- 通过真实百炼 Embedding、Rerank、Qwen 与持久化 Milvus Lite 完成端到端验证。
+
+下一阶段是 Phase 7：工具抽象、注册中心及 Weather、Search、Database 工具。
 
 ## 参考资料
 
@@ -422,5 +466,7 @@ Phase 5 已完成：
 - [阿里云百炼流式输出文档](https://help.aliyun.com/zh/model-studio/stream)
 - [阿里云百炼结构化输出文档](https://help.aliyun.com/zh/model-studio/qwen-structured-output)
 - [阿里云百炼文本 Embedding 文档](https://help.aliyun.com/zh/model-studio/embedding)
+- [阿里云百炼文本排序模型文档](https://help.aliyun.com/zh/model-studio/text-rerank-api)
 - [Milvus Lite 官方文档](https://milvus.io/docs/milvus_lite.md)
 - [Milvus JSON Field 官方文档](https://milvus.io/docs/use-json-fields.md)
+- [pypdf 文本提取文档](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)

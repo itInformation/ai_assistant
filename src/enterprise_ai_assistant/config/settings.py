@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     )
     dashscope_embedding_model: str = "text-embedding-v3"
     dashscope_embedding_dimensions: int = Field(default=1024, gt=0)
+    dashscope_rerank_url: str = (
+        "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+    )
+    dashscope_rerank_model: str = "qwen3-rerank"
     dashscope_timeout_seconds: float = Field(default=30.0, gt=0)
     dashscope_max_retries: int = Field(default=2, ge=0, le=10)
 
@@ -40,6 +44,26 @@ class Settings(BaseSettings):
     milvus_token: str | None = Field(default=None, repr=False)
     milvus_collection_name: str = "knowledge_chunks"
     milvus_timeout_seconds: float = Field(default=30.0, gt=0)
+
+    rag_chunk_size: int = Field(default=800, ge=100, le=8_000)
+    rag_chunk_overlap: int = Field(default=120, ge=0)
+    rag_embedding_batch_size: int = Field(default=10, ge=1, le=10)
+    rag_insert_batch_size: int = Field(default=100, ge=1, le=1_000)
+    rag_initial_top_k: int = Field(default=20, ge=1, le=100)
+    rag_final_top_k: int = Field(default=5, ge=1, le=20)
+    rag_max_context_chars: int = Field(default=8_000, ge=500)
+    rag_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
+    rag_max_file_size_mb: int = Field(default=20, ge=1, le=100)
+
+    @model_validator(mode="after")
+    def validate_rag_settings(self) -> "Settings":
+        """Validate relationships between RAG tuning parameters."""
+
+        if self.rag_chunk_overlap >= self.rag_chunk_size:
+            raise ValueError("RAG chunk overlap must be smaller than chunk size")
+        if self.rag_final_top_k > self.rag_initial_top_k:
+            raise ValueError("RAG final TopK must not exceed initial TopK")
+        return self
 
 
 @lru_cache(maxsize=1)

@@ -1,5 +1,10 @@
 """Provider-independent domain models."""
 
+from enterprise_ai_assistant.models.document import (
+    DocumentSection,
+    LoadedDocument,
+    TextChunk,
+)
 from enterprise_ai_assistant.models.embedding import (
     EmbeddingResponse,
     EmbeddingUsage,
@@ -11,6 +16,14 @@ from enterprise_ai_assistant.models.llm import (
     MessageRole,
     ResponseFormat,
     TokenUsage,
+)
+from enterprise_ai_assistant.models.rag import (
+    IngestionResult,
+    RagAnswer,
+    RagSource,
+    RerankItem,
+    RerankResponse,
+    RetrievalCandidate,
 )
 from enterprise_ai_assistant.models.vectorstore import (
     JSONValue,
@@ -25,11 +38,20 @@ __all__ = [
     "ChatChunk",
     "ChatMessage",
     "ChatResponse",
+    "DocumentSection",
     "EmbeddingResponse",
     "EmbeddingUsage",
+    "IngestionResult",
     "JSONValue",
+    "LoadedDocument",
     "MessageRole",
+    "RagAnswer",
+    "RagSource",
+    "RerankItem",
+    "RerankResponse",
     "ResponseFormat",
+    "RetrievalCandidate",
+    "TextChunk",
     "TokenUsage",
     "VectorDeleteResult",
     "VectorInsertResult",
