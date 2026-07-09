@@ -196,8 +196,9 @@ def test_chat_rejects_empty_conversation() -> None:
         asyncio.run(model.chat([]))
 
 
-def test_factory_requires_dashscope_api_key() -> None:
+def test_factory_requires_dashscope_api_key(monkeypatch: object) -> None:
     """The production adapter must never start without a provider key."""
 
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)  # type: ignore[attr-defined]
     with pytest.raises(LLMConfigurationError, match="DASHSCOPE_API_KEY"):
         create_dashscope_chat_model(Settings(_env_file=None))

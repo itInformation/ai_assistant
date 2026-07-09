@@ -13,6 +13,11 @@ from enterprise_ai_assistant.models import (
     EmbeddingResponse,
     EmbeddingUsage,
     ResponseFormat,
+    VectorDeleteResult,
+    VectorInsertResult,
+    VectorRecord,
+    VectorSearchFilter,
+    VectorSearchResult,
 )
 
 
@@ -61,12 +66,68 @@ class FakeEmbeddingModel:
         vectors = (
             (1.0, 0.0),
             (0.8, 0.6),
+            (0.0, 1.0),
+            (0.9, 0.1),
         )[: len(texts)]
         return EmbeddingResponse(
             vectors=vectors,
             model="fake-embedding",
             usage=EmbeddingUsage(prompt_tokens=4, total_tokens=4),
         )
+
+
+class FakeVectorStore:
+    """In-memory vector store used by the Phase 5 CLI test."""
+
+    def __init__(self) -> None:
+        self.records: Sequence[VectorRecord] = ()
+        self.deleted_ids: Sequence[str] = ()
+
+    async def ensure_collection(self) -> None:
+        """Satisfy collection initialization."""
+
+    async def insert(
+        self,
+        records: Sequence[VectorRecord],
+    ) -> VectorInsertResult:
+        """Record inserted entities."""
+
+        self.records = records
+        return VectorInsertResult(
+            inserted_count=len(records),
+            primary_keys=tuple(record.id for record in records),
+        )
+
+    async def delete(self, ids: Sequence[str]) -> VectorDeleteResult:
+        """Record deleted primary keys."""
+
+        self.deleted_ids = ids
+        return VectorDeleteResult(deleted_count=len(ids))
+
+    async def search(
+        self,
+        query_vector: Sequence[float],
+        *,
+        top_k: int = 5,
+        search_filter: VectorSearchFilter | None = None,
+    ) -> tuple[VectorSearchResult, ...]:
+        """Return one deterministic search result."""
+
+        record = self.records[1]
+        return (
+            VectorSearchResult(
+                id=record.id,
+                score=0.9,
+                document_id=record.document_id,
+                content=record.content,
+                source=record.source,
+                chunk_index=record.chunk_index,
+                metadata=record.metadata,
+            ),
+        )
+
+    async def close(self) -> None:
+        """Satisfy the vector-store lifecycle."""
 
 
 def test_main_prints_structured_application_info(
@@ -190,3 +251,28 @@ def test_run_embedding_demo_prints_vector_summary(capsys: object) -> None:
     assert output["dimension"] == 2
     assert output["cosine_similarity"] == 0.8
     assert output["vectors"][0]["preview"] == [1.0, 0.0]
+
+
+def test_run_vectorstore_demo_covers_insert_search_delete(
+    capsys: object,
+) -> None:
+    """Milvus Demo should clean up only the records it inserted."""
+
+    store = FakeVectorStore()
+    asyncio.run(
+        cli.run_vectorstore_demo(
+            Settings(
+                _env_file=None,
+                dashscope_embedding_dimensions=2,
+            ),
+            "如何检索企业文档?",
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=store,
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["inserted_count"] == 3
+    assert output["deleted_count"] == 3
+    assert output["results"][0]["score"] == 0.9
+    assert tuple(store.deleted_ids) == tuple(record.id for record in store.records)

@@ -6,6 +6,7 @@ import json
 from collections.abc import Sequence
 from dataclasses import asdict
 from math import sqrt
+from uuid import uuid4
 
 from enterprise_ai_assistant.app import run_demo
 from enterprise_ai_assistant.config import Settings, get_settings
@@ -15,7 +16,11 @@ from enterprise_ai_assistant.embedding import (
     create_dashscope_embedding_model,
 )
 from enterprise_ai_assistant.llm import ChatModel, create_dashscope_chat_model
-from enterprise_ai_assistant.models import ChatMessage
+from enterprise_ai_assistant.models import (
+    ChatMessage,
+    VectorRecord,
+    VectorSearchFilter,
+)
 from enterprise_ai_assistant.prompt import (
     PromptRegistry,
     PromptService,
@@ -24,6 +29,10 @@ from enterprise_ai_assistant.prompt import (
 from enterprise_ai_assistant.prompt.examples import (
     SupportTicketClassification,
     build_support_classification_prompt,
+)
+from enterprise_ai_assistant.vectorstore import (
+    VectorStore,
+    create_milvus_vector_store,
 )
 
 
@@ -58,6 +67,16 @@ def build_parser() -> argparse.ArgumentParser:
         "texts",
         nargs="+",
         help="需要向量化的一到十段文本",
+    )
+    vector_parser = subparsers.add_parser(
+        "vector-demo",
+        help="运行 Milvus Lite 增删查 Demo",
+    )
+    vector_parser.add_argument(
+        "query",
+        nargs="?",
+        default="如何使用向量数据库检索企业文档?",
+        help="用于相似度检索的问题",
     )
     return parser
 
@@ -171,6 +190,69 @@ def _cosine_similarity(
     )
 
 
+async def run_vectorstore_demo(
+    settings: Settings,
+    query: str,
+    *,
+    embedding_model: EmbeddingModel | None = None,
+    vector_store: VectorStore | None = None,
+) -> None:
+    """Run the Phase 5 Milvus Lite collection, insert, search, and delete demo."""
+
+    texts = [
+        "RAG 通过检索企业文档为大模型补充外部知识。",
+        "Milvus 是支持向量相似度搜索和元数据过滤的向量数据库。",
+        "Sony A7R V 是一台高像素全画幅微单相机。",
+    ]
+    embedder = embedding_model or create_dashscope_embedding_model(settings)
+    store = vector_store or create_milvus_vector_store(settings)
+    owns_store = vector_store is None
+    embedding_response = await embedder.embed([*texts, query])
+    document_id = f"phase5-demo-{uuid4().hex}"
+    records = [
+        VectorRecord(
+            id=f"{document_id}-{index}",
+            document_id=document_id,
+            content=text,
+            embedding=embedding_response.vectors[index],
+            source="phase5-demo",
+            chunk_index=index,
+            metadata={"topic": "photography" if index == 2 else "ai"},
+        )
+        for index, text in enumerate(texts)
+    ]
+    inserted_ids: tuple[str, ...] = ()
+    try:
+        await store.ensure_collection()
+        insert_result = await store.insert(records)
+        inserted_ids = insert_result.primary_keys
+        hits = await store.search(
+            embedding_response.vectors[-1],
+            top_k=2,
+            search_filter=VectorSearchFilter(source="phase5-demo"),
+        )
+        output = {
+            "collection": settings.milvus_collection_name,
+            "inserted_count": insert_result.inserted_count,
+            "results": [
+                {
+                    "id": hit.id,
+                    "score": hit.score,
+                    "content": hit.content,
+                    "metadata": hit.metadata,
+                }
+                for hit in hits
+            ],
+        }
+    finally:
+        if inserted_ids:
+            delete_result = await store.delete(inserted_ids)
+            output["deleted_count"] = delete_result.deleted_count
+        if owns_store:
+            await store.close()
+    print(json.dumps(output, ensure_ascii=False, indent=2))
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -203,6 +285,14 @@ def main(argv: Sequence[str] | None = None) -> None:
             run_embedding_demo(
                 settings,
                 args.texts,
+            )
+        )
+        return
+    if args.command == "vector-demo":
+        asyncio.run(
+            run_vectorstore_demo(
+                settings,
+                args.query,
             )
         )
         return

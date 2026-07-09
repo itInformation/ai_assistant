@@ -1,7 +1,6 @@
 """Type-safe application settings loaded from environment variables."""
 
 from functools import lru_cache
-from pathlib import Path
 from typing import Literal
 
 from pydantic import AliasChoices, Field
@@ -37,7 +36,10 @@ class Settings(BaseSettings):
     dashscope_timeout_seconds: float = Field(default=30.0, gt=0)
     dashscope_max_retries: int = Field(default=2, ge=0, le=10)
 
-    milvus_uri: Path = Path("milvus/knowledge.db")
+    milvus_uri: str = "milvus/knowledge.db"
+    milvus_token: str | None = Field(default=None, repr=False)
+    milvus_collection_name: str = "knowledge_chunks"
+    milvus_timeout_seconds: float = Field(default=30.0, gt=0)
 
 
 @lru_cache(maxsize=1)

@@ -185,8 +185,9 @@ def test_configuration_validates_model_dimensions() -> None:
         )
 
 
-def test_factory_requires_dashscope_api_key() -> None:
+def test_factory_requires_dashscope_api_key(monkeypatch: object) -> None:
     """The production adapter should never start without a provider key."""
 
+    monkeypatch.delenv("DASHSCOPE_API_KEY", raising=False)  # type: ignore[attr-defined]
     with pytest.raises(EmbeddingConfigurationError, match="DASHSCOPE_API_KEY"):
         create_dashscope_embedding_model(Settings(_env_file=None))

@@ -12,6 +12,14 @@ from enterprise_ai_assistant.models.llm import (
     ResponseFormat,
     TokenUsage,
 )
+from enterprise_ai_assistant.models.vectorstore import (
+    JSONValue,
+    VectorDeleteResult,
+    VectorInsertResult,
+    VectorRecord,
+    VectorSearchFilter,
+    VectorSearchResult,
+)
 
 __all__ = [
     "ChatChunk",
@@ -19,7 +27,13 @@ __all__ = [
     "ChatResponse",
     "EmbeddingResponse",
     "EmbeddingUsage",
+    "JSONValue",
     "MessageRole",
     "ResponseFormat",
     "TokenUsage",
+    "VectorDeleteResult",
+    "VectorInsertResult",
+    "VectorRecord",
+    "VectorSearchFilter",
+    "VectorSearchResult",
 ]

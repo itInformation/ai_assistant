@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 4 — DashScope Embedding 已完成
+> 当前进度：Phase 5 — Milvus Lite 向量存储已完成
 
 ## 快速开始
 
@@ -43,6 +43,15 @@ uv run ai-assistant prompt "已经付款，但退款三天还没到账。" --deb
 uv run ai-assistant embed "企业知识库" "公司内部文档检索"
 ```
 
+运行 Milvus Lite 的建表、插入、过滤搜索和删除 Demo：
+
+```bash
+uv run ai-assistant vector-demo "如何用向量数据库检索企业文档？"
+```
+
+Demo 写入的记录使用唯一 ID，并在搜索结束后按 ID 精确删除；Collection 和本地
+数据库文件会保留，方便验证持久化与后续阶段复用。
+
 常用质量检查命令：
 
 ```bash
@@ -65,6 +74,10 @@ uv run pytest
 | `DASHSCOPE_EMBEDDING_DIMENSIONS` | `1024` | 输出向量维度 |
 | `DASHSCOPE_TIMEOUT_SECONDS` | `30` | 单次请求超时秒数 |
 | `DASHSCOPE_MAX_RETRIES` | `2` | 首次调用之外的最大重试次数 |
+| `MILVUS_URI` | `milvus/knowledge.db` | Lite 文件路径或远端 Milvus URI |
+| `MILVUS_TOKEN` | 无 | 远端 Milvus/Zilliz Cloud 凭据 |
+| `MILVUS_COLLECTION_NAME` | `knowledge_chunks` | 文档 Chunk Collection |
+| `MILVUS_TIMEOUT_SECONDS` | `30` | Milvus 操作超时秒数 |
 
 ## 项目目标
 
@@ -205,6 +218,35 @@ Embedding 模块延续端口与适配器设计：
 v3 的检索效果最好，适合作为首版准确率基线；维度越高，Milvus 的存储、内存和
 距离计算成本也越高。Phase 6 将用真实企业文档评测召回率，再决定是否降至
 768 或 512 维。同步接口单次最多接收 10 段文本，文档摄取阶段会按该限制分批。
+
+### Milvus Collection 与 Metadata 设计
+
+`VectorStore` 是应用层依赖的异步端口，`MilvusVectorStore` 是基础设施适配器。
+本地 URI 指向 `.db` 文件时启动 Milvus Lite；迁移到 Standalone、Distributed
+或 Zilliz Cloud 时只需替换 URI 和 Token，领域模型与业务服务无需修改。
+
+`knowledge_chunks` 使用显式 Schema，并关闭 Dynamic Field：
+
+| 字段 | 类型 | 用途 |
+| --- | --- | --- |
+| `id` | VARCHAR 主键 | 应用生成的稳定 Chunk ID，支持幂等定位和精确删除 |
+| `document_id` | VARCHAR | 聚合同一原始文档的所有 Chunk |
+| `content` | VARCHAR | 检索命中后直接交给 Rerank 与 LLM 的原文 |
+| `source` | VARCHAR | 文件路径或业务来源，支持常用过滤 |
+| `chunk_index` | INT64 | 保留 Chunk 在原文中的顺序 |
+| `metadata` | JSON | 部门、标签、页码等可扩展属性 |
+| `embedding` | FLOAT_VECTOR | 与 Embedding 模型维度一致的稠密向量 |
+
+`document_id`、`source` 和 `chunk_index` 单独建模，是因为它们属于稳定、高频的
+检索与排序字段；变化较快、不同文档类型不一致的属性放入 JSON，避免每增加一个
+业务字段就迁移 Collection Schema。Metadata 在写入前会检查 JSON 可序列化、
+键名和 64 KiB 上限。
+
+本地索引使用 `FLAT + COSINE`。FLAT 是 Milvus Lite 当前唯一真正支持的稠密
+向量索引，适合本地小数据集做精确检索；生产环境数据量增大后可以切换 HNSW 或
+其他 ANN 索引，而不修改 `VectorStore` 接口。适配器还统一了 Lite 与远端 Milvus
+在 Delete 返回结构和 COSINE 分数方向上的差异，业务层始终使用“分数越高越相关”
+的语义。
 
 ## 整体架构
 
@@ -361,8 +403,18 @@ Phase 4 已完成：
 - 支持本地输入限制、统一异常、超时和有限指数退避重试。
 - 提供向量摘要、范数和余弦相似度 CLI Demo，并完成真实百炼调用验证。
 
-下一阶段是 Phase 5：Milvus Lite、Collection、Metadata、Index、Insert、
-Delete 和 Search。
+Phase 5 已完成：
+
+- 定义供应商无关的 `VectorStore` 异步端口和向量领域模型。
+- 使用显式 Schema 创建 Milvus Lite Collection，关闭 Dynamic Field。
+- 实现 FLAT/COSINE Index、批量 Insert、按主键 Delete 和 TopK Search。
+- 实现安全结构化过滤、输入顺序与维度校验、JSON Metadata 校验。
+- 兼容 Milvus Lite 与远端 Milvus 的删除结果和相似度分数差异。
+- 通过真实 Milvus Lite 集成测试验证 Collection、Insert、Filter、Search、
+  Delete 和持久化文件。
+
+下一阶段是 Phase 6：PDF、Word、Markdown 摄取、Chunk、Retriever、Rerank
+和完整 RAG 回答。
 
 ## 参考资料
 
@@ -370,3 +422,5 @@ Delete 和 Search。
 - [阿里云百炼流式输出文档](https://help.aliyun.com/zh/model-studio/stream)
 - [阿里云百炼结构化输出文档](https://help.aliyun.com/zh/model-studio/qwen-structured-output)
 - [阿里云百炼文本 Embedding 文档](https://help.aliyun.com/zh/model-studio/embedding)
+- [Milvus Lite 官方文档](https://milvus.io/docs/milvus_lite.md)
+- [Milvus JSON Field 官方文档](https://milvus.io/docs/use-json-fields.md)
