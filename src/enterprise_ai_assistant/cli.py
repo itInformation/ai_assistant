@@ -53,6 +53,10 @@ from enterprise_ai_assistant.vectorstore import (
     VectorStore,
     create_milvus_vector_store,
 )
+from enterprise_ai_assistant.workflow import (
+    AdvancedLangGraphWorkflow,
+    BasicLangGraphWorkflow,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -126,6 +130,16 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="+",
         help="一个或多个连续问题; 多个问题共享本次进程内 Memory",
     )
+    workflow_parser = subparsers.add_parser(
+        "workflow",
+        help="运行 Phase 9 LangGraph 工作流 Demo",
+    )
+    workflow_parser.add_argument(
+        "mode",
+        choices=("basic", "advanced"),
+        help="basic=Planner/Retriever/Tool/Reviewer/Answer; advanced=多 Agent 编排",
+    )
+    workflow_parser.add_argument("question", help="需要工作流回答的问题")
     return parser
 
 
@@ -472,6 +486,53 @@ async def run_agent_demo(
             await tool_registry.close()
 
 
+async def run_workflow_demo(
+    settings: Settings,
+    mode: str,
+    question: str,
+    *,
+    chat_model: ChatModel | None = None,
+    embedding_model: EmbeddingModel | None = None,
+    vector_store: VectorStore | None = None,
+    registry: ToolRegistry | None = None,
+) -> None:
+    """Run Phase 9 LangGraph workflow and print every auditable node step."""
+
+    model = chat_model or create_dashscope_chat_model(settings)
+    embedder = embedding_model or create_dashscope_embedding_model(settings)
+    store = vector_store or create_milvus_vector_store(settings)
+    tool_registry = registry or create_tool_registry(settings)
+    owns_store = vector_store is None
+    owns_registry = registry is None
+    workflow_cls = (
+        AdvancedLangGraphWorkflow if mode == "advanced" else BasicLangGraphWorkflow
+    )
+    workflow = workflow_cls(
+        chat_model=model,
+        retriever=VectorRetriever(
+            embedding_model=embedder,
+            vector_store=store,
+            default_top_k=settings.workflow_retrieval_top_k,
+        ),
+        tools=tool_registry,
+        retrieval_top_k=settings.workflow_retrieval_top_k,
+        max_answer_tokens=settings.workflow_max_answer_tokens,
+    )
+    try:
+        result = await workflow.run(question)
+    finally:
+        if owns_registry:
+            await tool_registry.close()
+        if owns_store:
+            await store.close()
+
+    print(f"Checkpoint: {result.checkpoint_thread_id}")
+    for step in result.steps:
+        print(f"Node: {step.node}")
+        print(f"Summary: {step.summary}")
+    print(f"Final Answer: {result.answer}")
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -550,6 +611,9 @@ def main(argv: Sequence[str] | None = None) -> None:
                 args.questions,
             )
         )
+        return
+    if args.command == "workflow":
+        asyncio.run(run_workflow_demo(settings, args.mode, args.question))
         return
 
     result = run_demo(settings)

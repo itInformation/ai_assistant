@@ -487,3 +487,68 @@ def test_run_agent_demo_prints_react_trace(capsys: object) -> None:
     assert 'Action: {"tool": "weather"' in output
     assert "Observation:" in output
     assert "Final Answer: 北京天气晴。" in output
+
+
+def test_run_workflow_demo_prints_langgraph_trace(capsys: object) -> None:
+    """Workflow Demo should print checkpoint, node summaries, and final answer."""
+
+    store = FakeVectorStore()
+    store.records = (
+        VectorRecord(
+            id="doc-1-0",
+            document_id="doc-1",
+            content="北京办公室访客需要提前预约。",
+            embedding=(1.0, 0.0),
+            source="policy.md",
+            chunk_index=0,
+            metadata={},
+        ),
+    )
+
+    class WorkflowChatModel(FakeChatModel):
+        async def chat(
+            self,
+            messages: Sequence[ChatMessage],
+            *,
+            temperature: float | None = None,
+            max_tokens: int | None = None,
+            response_format: ResponseFormat = "text",
+        ) -> ChatResponse:
+            if response_format == "json_object" and "Planner" in messages[0].content:
+                return ChatResponse(
+                    content=(
+                        '{"goal":"回答出行建议",'
+                        '"retrieval_query":"北京 出行",'
+                        '"tool_name":"weather",'
+                        '"tool_arguments":{"location":"北京"}}'
+                    ),
+                    model="fake",
+                )
+            if response_format == "json_object" and "Reviewer" in messages[0].content:
+                return ChatResponse(
+                    content='{"passed":true,"feedback":"证据足够。"}',
+                    model="fake",
+                )
+            return ChatResponse(content="北京适合散步。", model="fake")
+
+    asyncio.run(
+        cli.run_workflow_demo(
+            Settings(
+                _env_file=None,
+                dashscope_embedding_dimensions=2,
+                workflow_retrieval_top_k=1,
+            ),
+            "basic",
+            "北京适合散步吗?",
+            chat_model=WorkflowChatModel(),
+            embedding_model=FakeEmbeddingModel(),
+            vector_store=store,
+            registry=ToolRegistry([FakeTool()]),
+        )
+    )
+
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "Checkpoint: workflow-" in output
+    assert "Node: planner" in output
+    assert "Node: answer" in output
+    assert "Final Answer: 北京适合散步。" in output

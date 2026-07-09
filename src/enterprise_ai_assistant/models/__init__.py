@@ -41,6 +41,12 @@ from enterprise_ai_assistant.models.vectorstore import (
     VectorSearchFilter,
     VectorSearchResult,
 )
+from enterprise_ai_assistant.models.workflow import (
+    WorkflowAnswer,
+    WorkflowPlan,
+    WorkflowReview,
+    WorkflowStep,
+)
 
 __all__ = [
     "AgentAnswer",
@@ -73,4 +79,8 @@ __all__ = [
     "VectorRecord",
     "VectorSearchFilter",
     "VectorSearchResult",
+    "WorkflowAnswer",
+    "WorkflowPlan",
+    "WorkflowReview",
+    "WorkflowStep",
 ]

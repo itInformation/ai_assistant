@@ -69,6 +69,9 @@ class Settings(BaseSettings):
     agent_max_observation_chars: int = Field(default=6_000, ge=500)
     agent_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
 
+    workflow_retrieval_top_k: int = Field(default=5, ge=1, le=20)
+    workflow_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
+
     @model_validator(mode="after")
     def validate_rag_settings(self) -> "Settings":
         """Validate relationships between RAG tuning parameters."""
