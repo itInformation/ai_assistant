@@ -6,7 +6,12 @@ from collections.abc import AsyncIterator, Sequence
 
 from enterprise_ai_assistant import cli
 from enterprise_ai_assistant.config import Settings
-from enterprise_ai_assistant.models import ChatChunk, ChatMessage, ChatResponse
+from enterprise_ai_assistant.models import (
+    ChatChunk,
+    ChatMessage,
+    ChatResponse,
+    ResponseFormat,
+)
 
 
 class FakeChatModel:
@@ -18,9 +23,17 @@ class FakeChatModel:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> ChatResponse:
         """Return a stable complete response."""
 
+        if response_format == "json_object":
+            return ChatResponse(
+                content=(
+                    '{"category":"售后","urgency":"中",' '"reason":"用户询问退款进度"}'
+                ),
+                model="fake",
+            )
         return ChatResponse(content=f"回复: {messages[0].content}", model="fake")
 
     async def stream_chat(
@@ -29,6 +42,7 @@ class FakeChatModel:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> AsyncIterator[ChatChunk]:
         """Yield a stable response in two chunks."""
 
@@ -104,3 +118,37 @@ def test_main_runs_chat_command(
     cli.main(["chat", "你好"])
 
     assert capsys.readouterr().out.endswith("回复: 你好\n")  # type: ignore[attr-defined]
+
+
+def test_run_prompt_demo_supports_offline_debug(capsys: object) -> None:
+    """Prompt debug should expose rendered messages without calling a model."""
+
+    asyncio.run(
+        cli.run_prompt_demo(
+            Settings(_env_file=None),
+            "退款什么时候到账?",
+            debug=True,
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["name"] == "support-ticket-classification"
+    assert output["version"] == 1
+    assert output["message_count"] == 6
+
+
+def test_run_prompt_demo_prints_validated_json(capsys: object) -> None:
+    """Prompt demo should print the schema-validated business result."""
+
+    asyncio.run(
+        cli.run_prompt_demo(
+            Settings(_env_file=None),
+            "退款什么时候到账?",
+            debug=False,
+            model=FakeChatModel(),
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["category"] == "售后"
+    assert output["urgency"] == "中"

@@ -3,7 +3,12 @@
 from collections.abc import AsyncIterator, Sequence
 from typing import Protocol, runtime_checkable
 
-from enterprise_ai_assistant.models import ChatChunk, ChatMessage, ChatResponse
+from enterprise_ai_assistant.models import (
+    ChatChunk,
+    ChatMessage,
+    ChatResponse,
+    ResponseFormat,
+)
 
 
 @runtime_checkable
@@ -16,6 +21,7 @@ class ChatModel(Protocol):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> ChatResponse:
         """Generate one complete response for a conversation."""
 
@@ -27,6 +33,7 @@ class ChatModel(Protocol):
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> AsyncIterator[ChatChunk]:
         """Generate incremental response chunks for a conversation."""
 

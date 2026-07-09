@@ -126,6 +126,7 @@ def test_chat_maps_response_and_usage() -> None:
             [ChatMessage(role="user", content="你好")],
             temperature=0.2,
             max_tokens=100,
+            response_format="json_object",
         )
     )
 
@@ -136,6 +137,7 @@ def test_chat_maps_response_and_usage() -> None:
     assert response.usage.total_tokens == 5
     assert completions.requests[0]["temperature"] == 0.2
     assert completions.requests[0]["max_tokens"] == 100
+    assert completions.requests[0]["response_format"] == {"type": "json_object"}
     assert completions.requests[0]["messages"] == [{"role": "user", "content": "你好"}]
 
 

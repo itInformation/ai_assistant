@@ -4,12 +4,22 @@ import argparse
 import asyncio
 import json
 from collections.abc import Sequence
+from dataclasses import asdict
 
 from enterprise_ai_assistant.app import run_demo
 from enterprise_ai_assistant.config import Settings, get_settings
 from enterprise_ai_assistant.core import configure_logging
 from enterprise_ai_assistant.llm import ChatModel, create_dashscope_chat_model
 from enterprise_ai_assistant.models import ChatMessage
+from enterprise_ai_assistant.prompt import (
+    PromptRegistry,
+    PromptService,
+    StructuredOutputParser,
+)
+from enterprise_ai_assistant.prompt.examples import (
+    SupportTicketClassification,
+    build_support_classification_prompt,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -24,6 +34,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--stream",
         action="store_true",
         help="以增量流式方式输出回复",
+    )
+    prompt_parser = subparsers.add_parser(
+        "prompt",
+        help="运行结构化 Prompt 分类 Demo",
+    )
+    prompt_parser.add_argument("question", help="需要分类的客服问题")
+    prompt_parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="只渲染并检查 Prompt, 不调用模型",
     )
     return parser
 
@@ -49,6 +69,39 @@ async def run_chat_demo(
     print(response.content)
 
 
+async def run_prompt_demo(
+    settings: Settings,
+    question: str,
+    *,
+    debug: bool,
+    model: ChatModel | None = None,
+) -> None:
+    """Run the Phase 3 versioned and structured prompt demo."""
+
+    registry = PromptRegistry()
+    registry.register(build_support_classification_prompt())
+    template = registry.get("support-ticket-classification")
+    variables = {"question": question}
+    if debug:
+        print(
+            json.dumps(
+                asdict(template.debug(**variables)),
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    chat_model = model or create_dashscope_chat_model(settings)
+    parser = StructuredOutputParser(SupportTicketClassification)
+    result = await PromptService(chat_model).run_structured(
+        template,
+        variables,
+        parser,
+    )
+    print(result.value.model_dump_json(indent=2))
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run a health or chat demo."""
 
@@ -64,6 +117,15 @@ def main(argv: Sequence[str] | None = None) -> None:
                 settings,
                 args.prompt,
                 stream=args.stream,
+            )
+        )
+        return
+    if args.command == "prompt":
+        asyncio.run(
+            run_prompt_demo(
+                settings,
+                args.question,
+                debug=args.debug,
             )
         )
         return

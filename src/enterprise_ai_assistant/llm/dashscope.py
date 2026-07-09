@@ -25,6 +25,7 @@ from enterprise_ai_assistant.models import (
     ChatChunk,
     ChatMessage,
     ChatResponse,
+    ResponseFormat,
     TokenUsage,
 )
 
@@ -76,6 +77,7 @@ class DashScopeChatModel:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> ChatResponse:
         """Generate a complete chat response."""
 
@@ -86,6 +88,7 @@ class DashScopeChatModel:
                 stream=False,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
         except APIStatusError as exc:
             raise self._provider_error(exc) from exc
@@ -112,6 +115,7 @@ class DashScopeChatModel:
         *,
         temperature: float | None = None,
         max_tokens: int | None = None,
+        response_format: ResponseFormat = "text",
     ) -> AsyncIterator[ChatChunk]:
         """Yield incremental chunks without replaying already emitted content."""
 
@@ -122,6 +126,7 @@ class DashScopeChatModel:
                 stream=True,
                 temperature=temperature,
                 max_tokens=max_tokens,
+                response_format=response_format,
             )
             # Only connection establishment is retried. Once a chunk has been
             # emitted, replaying the request could duplicate visible content.
@@ -149,6 +154,7 @@ class DashScopeChatModel:
         stream: bool,
         temperature: float | None,
         max_tokens: int | None,
+        response_format: ResponseFormat,
     ) -> Any:
         request: dict[str, Any] = {
             "model": self._model,
@@ -162,6 +168,8 @@ class DashScopeChatModel:
             request["temperature"] = temperature
         if max_tokens is not None:
             request["max_tokens"] = max_tokens
+        if response_format == "json_object":
+            request["response_format"] = {"type": "json_object"}
         if stream:
             request["stream_options"] = {"include_usage": True}
 

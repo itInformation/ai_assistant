@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 MessageRole = Literal["system", "user", "assistant"]
+ResponseFormat = Literal["text", "json_object"]
 
 
 @dataclass(frozen=True, slots=True)

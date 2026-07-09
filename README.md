@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 2 — DashScope LLM 封装已完成
+> 当前进度：Phase 3 — Prompt Engineering 已完成
 
 ## 快速开始
 
@@ -28,6 +28,13 @@ uv run ai-assistant health
 ```bash
 uv run ai-assistant chat "用三句话介绍 RAG"
 uv run ai-assistant chat "用三句话介绍 RAG" --stream
+```
+
+运行结构化客服分类 Prompt，或只在本地检查最终消息而不调用模型：
+
+```bash
+uv run ai-assistant prompt "已经付款，但退款三天还没到账。"
+uv run ai-assistant prompt "已经付款，但退款三天还没到账。" --debug
 ```
 
 常用质量检查命令：
@@ -144,6 +151,29 @@ OpenAI、DeepSeek 或 Claude 时，只需新增适配器，无需修改调用方
 重试仅覆盖连接失败、超时、限流和服务端错误，采用有限指数退避。SDK 内建重试
 被关闭，避免两层重试叠加。流式请求在建立连接前可以重试；一旦已经向调用方
 输出 chunk，发生异常时不会自动重放，以免产生重复内容。
+
+### Prompt Engineering 设计
+
+Prompt 模块由几个职责单一的组件组成：
+
+- `PromptTemplate`：组合 System Prompt、用户模板和 Few-shot 消息，并严格检查
+  缺失或多余变量，防止变量拼错后带着残缺上下文调用模型。
+- `FewShotExample`：使用真实的 user/assistant 消息对，而不是把示例拼成一大段
+  文本，使消息角色与模型训练时的对话结构保持一致。
+- `StructuredOutputParser`：从 Pydantic 模型生成 JSON Schema 指令，并对返回值
+  再次进行强类型校验。JSON Mode 保证语法合法，Schema Parser 保证字段和业务
+  约束合法，两者解决的问题不同。
+- `PromptRegistry`：以名称和正整数版本注册不可变模板，可固定历史版本或获取
+  最新版本，避免线上 Prompt 被静默覆盖，也便于回滚和 A/B 测试。
+- `PromptDebugInfo`：在调用模型前查看最终消息、变量、版本和字符数，排查问题时
+  不需要先消耗模型 Token。
+- `PromptService`：只依赖 `ChatModel` 协议，负责连接模板、模型与 Parser，不让
+  Prompt 领域逻辑依赖 DashScope 或 OpenAI SDK。
+
+结构化输出按照百炼 JSON Mode 的要求，在请求中传递
+`response_format={"type":"json_object"}`，同时在 System Prompt 中明确要求
+JSON 并附带 Schema。结构化调用不设置最大输出 Token，避免 JSON 被截断后无法
+解析。
 
 ## 整体架构
 
@@ -284,10 +314,18 @@ Phase 2 已完成：
 - 支持可配置超时、有限指数退避重试和统一异常转换。
 - 提供普通与流式最小聊天 CLI Demo，并通过 Fake Client 完成离线单元测试。
 
-下一阶段是 Phase 3：Prompt 模板、Few-shot、结构化输出、Output Parser 和
-Prompt 版本管理。
+Phase 3 已完成：
+
+- 实现 System Prompt、严格变量模板和 Few-shot 消息编排。
+- 实现百炼 JSON Mode 与 Pydantic JSON Schema 结构化输出。
+- 实现强类型 Output Parser 和不泄露原始业务内容的稳定解析异常。
+- 实现不可覆盖的 Prompt 版本注册、精确版本与最新版本解析。
+- 实现无需模型调用的 Prompt Debug 和真实百炼结构化分类 Demo。
+
+下一阶段是 Phase 4：Embedding 接口、百炼 Embedding 适配器、向量生成和测试。
 
 ## 参考资料
 
 - [阿里云百炼 OpenAI-compatible Chat 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
 - [阿里云百炼流式输出文档](https://help.aliyun.com/zh/model-studio/stream)
+- [阿里云百炼结构化输出文档](https://help.aliyun.com/zh/model-studio/qwen-structured-output)

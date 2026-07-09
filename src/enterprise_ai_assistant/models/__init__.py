@@ -5,6 +5,7 @@ from enterprise_ai_assistant.models.llm import (
     ChatMessage,
     ChatResponse,
     MessageRole,
+    ResponseFormat,
     TokenUsage,
 )
 
@@ -13,5 +14,6 @@ __all__ = [
     "ChatMessage",
     "ChatResponse",
     "MessageRole",
+    "ResponseFormat",
     "TokenUsage",
 ]
