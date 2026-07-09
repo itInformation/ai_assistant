@@ -63,6 +63,12 @@ class Settings(BaseSettings):
     database_max_rows: int = Field(default=100, ge=1, le=1_000)
     database_timeout_seconds: float = Field(default=5.0, gt=0)
 
+    agent_max_tool_calls: int = Field(default=5, ge=1, le=20)
+    agent_memory_turns: int = Field(default=6, ge=1, le=50)
+    agent_memory_max_chars: int = Field(default=12_000, ge=1_000)
+    agent_max_observation_chars: int = Field(default=6_000, ge=500)
+    agent_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
+
     @model_validator(mode="after")
     def validate_rag_settings(self) -> "Settings":
         """Validate relationships between RAG tuning parameters."""

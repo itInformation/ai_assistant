@@ -29,6 +29,8 @@ def test_settings_have_safe_defaults(monkeypatch: object) -> None:
     assert settings.tavily_api_key is None
     assert settings.database_path == "data/assistant.db"
     assert settings.database_max_rows == 100
+    assert settings.agent_max_tool_calls == 5
+    assert settings.agent_memory_turns == 6
 
 
 def test_settings_read_environment(monkeypatch: object) -> None:

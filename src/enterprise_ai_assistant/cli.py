@@ -9,6 +9,7 @@ from math import sqrt
 from pathlib import Path
 from uuid import uuid4
 
+from enterprise_ai_assistant.agent import ConversationMemory, ReActAgent
 from enterprise_ai_assistant.app import run_demo
 from enterprise_ai_assistant.config import Settings, get_settings
 from enterprise_ai_assistant.core import configure_logging
@@ -16,9 +17,14 @@ from enterprise_ai_assistant.embedding import (
     EmbeddingModel,
     create_dashscope_embedding_model,
 )
-from enterprise_ai_assistant.llm import ChatModel, create_dashscope_chat_model
+from enterprise_ai_assistant.llm import (
+    ChatModel,
+    ToolCallingModel,
+    create_dashscope_chat_model,
+)
 from enterprise_ai_assistant.models import (
     ChatMessage,
+    ToolResult,
     VectorRecord,
     VectorSearchFilter,
 )
@@ -110,6 +116,15 @@ def build_parser() -> argparse.ArgumentParser:
     tool_parser.add_argument(
         "arguments",
         help='JSON 对象, 例如 \'{"location":"北京"}\'',
+    )
+    agent_parser = subparsers.add_parser(
+        "agent",
+        help="运行带 Memory 和 Tool Calling 的 ReAct Agent",
+    )
+    agent_parser.add_argument(
+        "questions",
+        nargs="+",
+        help="一个或多个连续问题; 多个问题共享本次进程内 Memory",
     )
     return parser
 
@@ -403,6 +418,60 @@ def list_tools(
         asyncio.run(tool_registry.close())
 
 
+async def run_agent_demo(
+    settings: Settings,
+    questions: Sequence[str],
+    *,
+    model: ToolCallingModel | None = None,
+    registry: ToolRegistry | None = None,
+) -> None:
+    """Run Phase 8 ReAct and print its auditable execution trace."""
+
+    agent_model = model or create_dashscope_chat_model(settings)
+    tool_registry = registry or create_tool_registry(settings)
+    agent = ReActAgent(
+        model=agent_model,
+        tools=tool_registry,
+        memory=ConversationMemory(
+            max_turns=settings.agent_memory_turns,
+            max_chars=settings.agent_memory_max_chars,
+        ),
+        max_tool_calls=settings.agent_max_tool_calls,
+        max_observation_chars=settings.agent_max_observation_chars,
+        max_answer_tokens=settings.agent_max_answer_tokens,
+    )
+    try:
+        for question in questions:
+            result = await agent.answer(question)
+            for trace in result.traces:
+                print(f"Thought: {trace.thought}")
+                print(
+                    "Action: "
+                    + json.dumps(
+                        {
+                            "tool": trace.action.name,
+                            "arguments": trace.action.arguments,
+                        },
+                        ensure_ascii=False,
+                    )
+                )
+                observation = trace.observation
+                if isinstance(observation, ToolResult):
+                    observation_value: object = {
+                        "summary": observation.content,
+                        "data": observation.data,
+                    }
+                else:
+                    observation_value = observation
+                print(
+                    "Observation: " + json.dumps(observation_value, ensure_ascii=False)
+                )
+            print(f"Final Answer: {result.answer}")
+    finally:
+        if registry is None:
+            await tool_registry.close()
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -471,6 +540,14 @@ def main(argv: Sequence[str] | None = None) -> None:
                 settings,
                 args.name,
                 args.arguments,
+            )
+        )
+        return
+    if args.command == "agent":
+        asyncio.run(
+            run_agent_demo(
+                settings,
+                args.questions,
             )
         )
         return

@@ -10,6 +10,7 @@ from enterprise_ai_assistant.llm.exceptions import (
     LLMProviderError,
 )
 from enterprise_ai_assistant.llm.protocols import ChatModel
+from enterprise_ai_assistant.llm.tool_calling import ToolCallingModel
 
 __all__ = [
     "ChatModel",
@@ -17,5 +18,6 @@ __all__ = [
     "LLMConfigurationError",
     "LLMError",
     "LLMProviderError",
+    "ToolCallingModel",
     "create_dashscope_chat_model",
 ]

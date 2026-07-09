@@ -1,5 +1,12 @@
 """Provider-independent domain models."""
 
+from enterprise_ai_assistant.models.agent import (
+    AgentAnswer,
+    AgentMessage,
+    AgentModelResponse,
+    AgentToolCall,
+    AgentTrace,
+)
 from enterprise_ai_assistant.models.document import (
     DocumentSection,
     LoadedDocument,
@@ -36,6 +43,11 @@ from enterprise_ai_assistant.models.vectorstore import (
 )
 
 __all__ = [
+    "AgentAnswer",
+    "AgentMessage",
+    "AgentModelResponse",
+    "AgentToolCall",
+    "AgentTrace",
     "ChatChunk",
     "ChatMessage",
     "ChatResponse",

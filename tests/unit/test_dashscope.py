@@ -16,7 +16,7 @@ from enterprise_ai_assistant.llm import (
     LLMProviderError,
     create_dashscope_chat_model,
 )
-from enterprise_ai_assistant.models import ChatMessage
+from enterprise_ai_assistant.models import AgentMessage, ChatMessage, ToolSpec
 
 
 class FakeCompletions:
@@ -95,6 +95,44 @@ def chunk(content: str, finish_reason: str | None = None) -> ChatCompletionChunk
             "created": 1,
             "model": "qwen-plus",
             "object": "chat.completion.chunk",
+        }
+    )
+
+
+def tool_completion(arguments: str = '{"location":"北京"}') -> ChatCompletion:
+    """Build a native Function Calling response."""
+
+    return ChatCompletion.model_validate(
+        {
+            "id": "chatcmpl-tool",
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "content": "需要查询实时天气。",
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {
+                                    "name": "weather",
+                                    "arguments": arguments,
+                                },
+                            }
+                        ],
+                    },
+                }
+            ],
+            "created": 1,
+            "model": "qwen-plus",
+            "object": "chat.completion",
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+            },
         }
     )
 
@@ -194,6 +232,58 @@ def test_chat_rejects_empty_conversation() -> None:
 
     with pytest.raises(ValueError, match="at least one"):
         asyncio.run(model.chat([]))
+
+
+def test_chat_with_tools_maps_calls_and_openai_messages() -> None:
+    """Function Calling should remain provider-independent at the Agent layer."""
+
+    completions = FakeCompletions(tool_completion())
+    model = build_model(completions)
+    spec = ToolSpec(
+        name="weather",
+        description="Get weather.",
+        parameters={
+            "type": "object",
+            "properties": {"location": {"type": "string"}},
+        },
+    )
+    messages = [
+        AgentMessage(role="user", content="北京天气?"),
+        AgentMessage(
+            role="assistant",
+            content="先查询。",
+            tool_calls=(),
+        ),
+        AgentMessage(
+            role="tool",
+            content='{"temperature":30}',
+            tool_call_id="previous-call",
+        ),
+    ]
+
+    result = asyncio.run(model.chat_with_tools(messages, [spec]))
+
+    assert result.message.tool_calls[0].arguments == {"location": "北京"}
+    assert result.prompt_tokens == 10
+    request = completions.requests[0]
+    assert request["parallel_tool_calls"] is False
+    assert request["extra_body"] == {"enable_thinking": False}
+    assert request["tools"][0]["function"]["name"] == "weather"
+    assert request["messages"][-1]["tool_call_id"] == "previous-call"
+
+
+def test_chat_with_tools_rejects_invalid_argument_json() -> None:
+    """Malformed provider arguments must not reach a Tool."""
+
+    model = build_model(FakeCompletions(tool_completion("not-json")))
+
+    with pytest.raises(LLMProviderError, match="invalid Agent"):
+        asyncio.run(
+            model.chat_with_tools(
+                [AgentMessage(role="user", content="天气?")],
+                [],
+            )
+        )
 
 
 def test_factory_requires_dashscope_api_key(monkeypatch: object) -> None:

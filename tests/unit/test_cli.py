@@ -8,6 +8,9 @@ from pathlib import Path
 from enterprise_ai_assistant import cli
 from enterprise_ai_assistant.config import Settings
 from enterprise_ai_assistant.models import (
+    AgentMessage,
+    AgentModelResponse,
+    AgentToolCall,
     ChatChunk,
     ChatMessage,
     ChatResponse,
@@ -188,6 +191,42 @@ class FakeTool:
 
     async def close(self) -> None:
         """Satisfy the tool lifecycle."""
+
+
+class FakeAgentModel:
+    """Return one tool call followed by a final answer."""
+
+    def __init__(self) -> None:
+        self.turn = 0
+
+    async def chat_with_tools(
+        self,
+        messages: Sequence[AgentMessage],
+        tools: Sequence[ToolSpec],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AgentModelResponse:
+        self.turn += 1
+        if self.turn == 1:
+            return AgentModelResponse(
+                message=AgentMessage(
+                    role="assistant",
+                    content="需要查询天气。",
+                    tool_calls=(
+                        AgentToolCall(
+                            id="call-1",
+                            name="weather",
+                            arguments={"location": "北京"},
+                        ),
+                    ),
+                ),
+                model="fake-agent",
+            )
+        return AgentModelResponse(
+            message=AgentMessage(role="assistant", content="北京天气晴。"),
+            model="fake-agent",
+        )
 
 
 def test_main_prints_structured_application_info(
@@ -429,3 +468,22 @@ def test_list_tools_prints_json_schema(capsys: object) -> None:
     output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
     assert output[0]["name"] == "weather"
     assert output[0]["parameters"]["type"] == "object"
+
+
+def test_run_agent_demo_prints_react_trace(capsys: object) -> None:
+    """Agent Demo should print required Thought, Action, and Observation."""
+
+    asyncio.run(
+        cli.run_agent_demo(
+            Settings(_env_file=None),
+            ["北京天气?"],
+            model=FakeAgentModel(),
+            registry=ToolRegistry([FakeTool()]),
+        )
+    )
+
+    output = capsys.readouterr().out  # type: ignore[attr-defined]
+    assert "Thought: 需要查询天气。" in output
+    assert 'Action: {"tool": "weather"' in output
+    assert "Observation:" in output
+    assert "Final Answer: 北京天气晴。" in output

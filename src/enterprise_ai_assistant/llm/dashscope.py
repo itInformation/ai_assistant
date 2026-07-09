@@ -1,5 +1,6 @@
 """DashScope chat adapter implemented through its OpenAI-compatible API."""
 
+import json
 from collections.abc import AsyncIterator, Sequence
 from typing import Any
 
@@ -22,11 +23,15 @@ from enterprise_ai_assistant.llm.exceptions import (
     LLMProviderError,
 )
 from enterprise_ai_assistant.models import (
+    AgentMessage,
+    AgentModelResponse,
+    AgentToolCall,
     ChatChunk,
     ChatMessage,
     ChatResponse,
     ResponseFormat,
     TokenUsage,
+    ToolSpec,
 )
 
 _RETRYABLE_ERRORS = (
@@ -147,6 +152,74 @@ class DashScopeChatModel:
         except _RETRYABLE_ERRORS as exc:
             raise self._provider_error(exc) from exc
 
+    async def chat_with_tools(
+        self,
+        messages: Sequence[AgentMessage],
+        tools: Sequence[ToolSpec],
+        *,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
+    ) -> AgentModelResponse:
+        """Use DashScope native Function Calling for one Agent turn."""
+
+        if not messages:
+            raise ValueError("at least one agent message is required")
+        request: dict[str, Any] = {
+            "model": self._model,
+            "messages": [self._map_agent_message(message) for message in messages],
+            "extra_body": {"enable_thinking": False},
+        }
+        if tools:
+            # ReAct handles dependent calls serially and keeps the trace ordered.
+            request["parallel_tool_calls"] = False
+            request["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.parameters,
+                    },
+                }
+                for tool in tools
+            ]
+            request["tool_choice"] = "auto"
+        if temperature is not None:
+            request["temperature"] = temperature
+        if max_tokens is not None:
+            request["max_tokens"] = max_tokens
+        try:
+            response = await self._request_with_retry(request)
+        except APIStatusError as exc:
+            raise self._provider_error(exc) from exc
+        except _RETRYABLE_ERRORS as exc:
+            raise self._provider_error(exc) from exc
+        if not isinstance(response, ChatCompletion) or not response.choices:
+            raise LLMProviderError("DashScope returned no Agent response choices")
+        choice = response.choices[0]
+        try:
+            calls = tuple(
+                self._map_tool_call(call) for call in (choice.message.tool_calls or ())
+            )
+            message = AgentMessage(
+                role="assistant",
+                content=choice.message.content or "",
+                tool_calls=calls,
+            )
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise LLMProviderError(
+                "DashScope returned an invalid Agent message"
+            ) from exc
+        usage = self._map_usage(response.usage)
+        return AgentModelResponse(
+            message=message,
+            model=response.model,
+            finish_reason=choice.finish_reason,
+            request_id=response.id,
+            prompt_tokens=usage.prompt_tokens if usage else None,
+            completion_tokens=usage.completion_tokens if usage else None,
+        )
+
     async def _create_with_retry(
         self,
         messages: Sequence[ChatMessage],
@@ -185,6 +258,57 @@ class DashScopeChatModel:
             with attempt:
                 return await self._client.chat.completions.create(**request)
         raise AssertionError("retry loop completed without a result")
+
+    async def _request_with_retry(self, request: dict[str, Any]) -> Any:
+        """Execute a non-streaming request with the shared bounded policy."""
+
+        retrying = AsyncRetrying(
+            stop=stop_after_attempt(self._max_retries + 1),
+            wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
+            retry=retry_if_exception_type(_RETRYABLE_ERRORS),
+            reraise=True,
+            before_sleep=self._log_retry,
+        )
+        async for attempt in retrying:
+            with attempt:
+                return await self._client.chat.completions.create(**request)
+        raise AssertionError("retry loop completed without a result")
+
+    @staticmethod
+    def _map_agent_message(message: AgentMessage) -> dict[str, Any]:
+        mapped: dict[str, Any] = {
+            "role": message.role,
+            "content": message.content,
+        }
+        if message.tool_calls:
+            mapped["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {
+                        "name": call.name,
+                        "arguments": json.dumps(
+                            call.arguments,
+                            ensure_ascii=False,
+                        ),
+                    },
+                }
+                for call in message.tool_calls
+            ]
+        if message.tool_call_id is not None:
+            mapped["tool_call_id"] = message.tool_call_id
+        return mapped
+
+    @staticmethod
+    def _map_tool_call(call: Any) -> AgentToolCall:
+        arguments = json.loads(call.function.arguments)
+        if not isinstance(arguments, dict):
+            raise ValueError("tool arguments must be an object")
+        return AgentToolCall(
+            id=str(call.id),
+            name=str(call.function.name),
+            arguments=arguments,
+        )
 
     def _log_retry(self, retry_state: Any) -> None:
         self._logger.warning(
