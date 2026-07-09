@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 3 — Prompt Engineering 已完成
+> 当前进度：Phase 4 — DashScope Embedding 已完成
 
 ## 快速开始
 
@@ -37,6 +37,12 @@ uv run ai-assistant prompt "已经付款，但退款三天还没到账。"
 uv run ai-assistant prompt "已经付款，但退款三天还没到账。" --debug
 ```
 
+生成一段或多段文本的 Embedding。传入两段文本时，Demo 还会计算余弦相似度：
+
+```bash
+uv run ai-assistant embed "企业知识库" "公司内部文档检索"
+```
+
 常用质量检查命令：
 
 ```bash
@@ -55,6 +61,8 @@ uv run pytest
 | `DASHSCOPE_API_KEY` | 无 | 百炼 API Key，聊天调用必填 |
 | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 百炼 OpenAI-compatible API 地址 |
 | `DASHSCOPE_CHAT_MODEL` | `qwen-plus` | 默认聊天模型；兼容已有的 `DASHSCOPE_MODEL` |
+| `DASHSCOPE_EMBEDDING_MODEL` | `text-embedding-v3` | 默认文本向量模型 |
+| `DASHSCOPE_EMBEDDING_DIMENSIONS` | `1024` | 输出向量维度 |
 | `DASHSCOPE_TIMEOUT_SECONDS` | `30` | 单次请求超时秒数 |
 | `DASHSCOPE_MAX_RETRIES` | `2` | 首次调用之外的最大重试次数 |
 
@@ -174,6 +182,29 @@ Prompt 模块由几个职责单一的组件组成：
 `response_format={"type":"json_object"}`，同时在 System Prompt 中明确要求
 JSON 并附带 Schema。结构化调用不设置最大输出 Token，避免 JSON 被截断后无法
 解析。
+
+### Embedding 原理与设计
+
+Embedding 模型把文本映射为固定维度的稠密浮点向量。语义接近的文本在向量空间
+中的方向更接近，因此可以使用余弦相似度比较查询与文档，而不局限于关键词是否
+完全相同。后续 RAG 会把文档 Chunk 的向量写入 Milvus，并用问题向量检索近邻。
+
+Embedding 模块延续端口与适配器设计：
+
+- `EmbeddingModel` 是业务层依赖的统一异步接口。
+- `EmbeddingResponse` 保存有序向量、模型、请求 ID 和 Token Usage，并保证
+  返回矩阵非空、等维。
+- `DashScopeEmbeddingModel` 封装百炼 OpenAI-compatible Embeddings API，
+  在本地校验空文本、同步批量上限、支持维度和响应索引。
+- 响应依据 provider 返回的 `index` 排序，确保批量向量始终与输入文本一一对应；
+  索引缺失或维度异常会在进入向量库前失败。
+- 连接失败、超时、限流和服务端错误使用与 LLM 相同的有限指数退避，SDK 内建
+  重试保持关闭。
+
+默认选择 `text-embedding-v3` 的 1024 维输出。根据百炼官方评测，1024 维在
+v3 的检索效果最好，适合作为首版准确率基线；维度越高，Milvus 的存储、内存和
+距离计算成本也越高。Phase 6 将用真实企业文档评测召回率，再决定是否降至
+768 或 512 维。同步接口单次最多接收 10 段文本，文档摄取阶段会按该限制分批。
 
 ## 整体架构
 
@@ -322,10 +353,20 @@ Phase 3 已完成：
 - 实现不可覆盖的 Prompt 版本注册、精确版本与最新版本解析。
 - 实现无需模型调用的 Prompt Debug 和真实百炼结构化分类 Demo。
 
-下一阶段是 Phase 4：Embedding 接口、百炼 Embedding 适配器、向量生成和测试。
+Phase 4 已完成：
+
+- 定义供应商无关的 `EmbeddingModel` 协议和向量响应模型。
+- 实现百炼 `text-embedding-v3` 异步适配器和批量向量生成。
+- 支持可配置维度、Token Usage、请求 ID、输入顺序恢复和维度校验。
+- 支持本地输入限制、统一异常、超时和有限指数退避重试。
+- 提供向量摘要、范数和余弦相似度 CLI Demo，并完成真实百炼调用验证。
+
+下一阶段是 Phase 5：Milvus Lite、Collection、Metadata、Index、Insert、
+Delete 和 Search。
 
 ## 参考资料
 
 - [阿里云百炼 OpenAI-compatible Chat 文档](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
 - [阿里云百炼流式输出文档](https://help.aliyun.com/zh/model-studio/stream)
 - [阿里云百炼结构化输出文档](https://help.aliyun.com/zh/model-studio/qwen-structured-output)
+- [阿里云百炼文本 Embedding 文档](https://help.aliyun.com/zh/model-studio/embedding)

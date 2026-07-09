@@ -33,6 +33,7 @@ class Settings(BaseSettings):
         ),
     )
     dashscope_embedding_model: str = "text-embedding-v3"
+    dashscope_embedding_dimensions: int = Field(default=1024, gt=0)
     dashscope_timeout_seconds: float = Field(default=30.0, gt=0)
     dashscope_max_retries: int = Field(default=2, ge=0, le=10)
 

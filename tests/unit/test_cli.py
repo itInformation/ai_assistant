@@ -10,6 +10,8 @@ from enterprise_ai_assistant.models import (
     ChatChunk,
     ChatMessage,
     ChatResponse,
+    EmbeddingResponse,
+    EmbeddingUsage,
     ResponseFormat,
 )
 
@@ -48,6 +50,23 @@ class FakeChatModel:
 
         for content in ("流式", "回复"):
             yield ChatChunk(content=content, model="fake")
+
+
+class FakeEmbeddingModel:
+    """Deterministic embedding model used by CLI tests."""
+
+    async def embed(self, texts: Sequence[str]) -> EmbeddingResponse:
+        """Return one small vector per input text."""
+
+        vectors = (
+            (1.0, 0.0),
+            (0.8, 0.6),
+        )[: len(texts)]
+        return EmbeddingResponse(
+            vectors=vectors,
+            model="fake-embedding",
+            usage=EmbeddingUsage(prompt_tokens=4, total_tokens=4),
+        )
 
 
 def test_main_prints_structured_application_info(
@@ -152,3 +171,22 @@ def test_run_prompt_demo_prints_validated_json(capsys: object) -> None:
     output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
     assert output["category"] == "售后"
     assert output["urgency"] == "中"
+
+
+def test_run_embedding_demo_prints_vector_summary(capsys: object) -> None:
+    """Embedding demo should summarize vectors without dumping full arrays."""
+
+    asyncio.run(
+        cli.run_embedding_demo(
+            Settings(_env_file=None),
+            ["企业知识库", "公司文档检索"],
+            model=FakeEmbeddingModel(),
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["model"] == "fake-embedding"
+    assert output["count"] == 2
+    assert output["dimension"] == 2
+    assert output["cosine_similarity"] == 0.8
+    assert output["vectors"][0]["preview"] == [1.0, 0.0]
