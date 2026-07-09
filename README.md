@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 10 — FastAPI 服务化与基础可观测性已完成
+> 当前进度：Phase 11 — 项目交付材料、容器化与面试材料已完成
 
 ## 快速开始
 
@@ -130,6 +130,16 @@ curl -X POST http://127.0.0.1:8000/api/v1/workflow \
 每个 AI 端点都会返回 `observability` 字段，包含 `request_id`、`latency_ms`、
 `token_usage` 和安全的 `tool_trace` 摘要。服务端同时输出结构化日志，记录
 Prompt/Response 预览、Token Usage、Tool Trace、Error 和 Latency。
+
+使用 Docker Compose 启动服务：
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+详细部署说明见 [docs/deployment.md](docs/deployment.md)，简历与面试材料见
+[docs/project-summary.md](docs/project-summary.md)。
 
 常用质量检查命令：
 
@@ -382,22 +392,113 @@ v3 的检索效果最好，适合作为首版准确率基线；维度越高，Mi
 
 ## 整体架构
 
-```text
-┌─────────────────────────────────────────────┐
-│ API / CLI                                   │
-├─────────────────────────────────────────────┤
-│ Application                                 │
-│ RAG Service │ Agent Service │ Ingestion     │
-├─────────────────────────────────────────────┤
-│ Domain                                      │
-│ Models │ Ports │ Prompt │ Workflow State    │
-├─────────────────────────────────────────────┤
-│ Infrastructure                              │
-│ DashScope │ Milvus │ Tools │ Logging        │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    Client["CLI / REST Client / Swagger"] --> API["FastAPI / CLI"]
+    API --> App["Application Services"]
+    App --> RAG["RAG Service"]
+    App --> Agent["ReAct Agent"]
+    App --> Graph["LangGraph Workflow"]
+    App --> Ingest["Ingestion Service"]
+
+    RAG --> Retriever["Retriever + Rerank"]
+    Agent --> Registry["Tool Registry"]
+    Graph --> Registry
+    Graph --> Retriever
+    Ingest --> Loader["PDF / Word / Markdown Loader"]
+
+    Retriever --> Milvus["Milvus Lite / Milvus"]
+    Ingest --> Embedding["DashScope Embedding"]
+    Embedding --> Milvus
+    RAG --> LLM["DashScope Chat"]
+    Agent --> LLM
+    Graph --> LLM
+    Registry --> Weather["Weather Tool"]
+    Registry --> Search["Search Tool"]
+    Registry --> DB["SQLite Database Tool"]
+    API --> Obs["Observability Recorder"]
 ```
 
 依赖方向由外向内：基础设施实现领域端口，领域与应用层不依赖具体厂商 SDK。这个结构与 Java 后端中的接口、Service、Repository/Adapter 分层类似。
+
+## 核心流程图
+
+### RAG 流程
+
+```mermaid
+flowchart LR
+    Doc["PDF / Word / Markdown"] --> Load["加载与解析"]
+    Load --> Chunk["自然边界 Chunk"]
+    Chunk --> Embed["百炼 Embedding"]
+    Embed --> Store["Milvus 写入"]
+    Question["用户问题"] --> QEmbed["问题 Embedding"]
+    QEmbed --> Retrieve["TopK 向量召回"]
+    Store --> Retrieve
+    Retrieve --> Rerank["qwen3-rerank 精排"]
+    Rerank --> Prompt["带来源上下文 Prompt"]
+    Prompt --> Answer["Qwen Answer"]
+```
+
+### ReAct Agent 流程
+
+```mermaid
+flowchart LR
+    User["用户问题"] --> Plan["Planning / Thought 摘要"]
+    Plan --> Action["Action: Tool Call"]
+    Action --> Registry["ToolRegistry 允许列表"]
+    Registry --> Tool["Weather / Search / Database"]
+    Tool --> Observation["Observation"]
+    Observation --> Decide{"继续调用?"}
+    Decide -->|是| Action
+    Decide -->|否| Final["Final Answer"]
+```
+
+### LangGraph 工作流
+
+```mermaid
+flowchart LR
+    Start([START]) --> Planner["Planner"]
+    Planner --> Retriever["Retriever"]
+    Retriever --> Tool["Tool"]
+    Tool --> Reviewer["Reviewer"]
+    Reviewer --> Answer["Answer"]
+    Answer --> End([END])
+```
+
+进阶版：
+
+```mermaid
+flowchart LR
+    Start([START]) --> Supervisor["Supervisor"]
+    Supervisor --> Research["Research Agent"]
+    Research --> ToolAgent["Tool Agent"]
+    ToolAgent --> Summary["Summary Agent"]
+    Summary --> End([END])
+```
+
+## API 时序图
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as FastAPI
+    participant O as Observability
+    participant R as RAG/Agent/Workflow
+    participant M as DashScope
+    participant V as Milvus/Tools
+
+    C->>A: POST /api/v1/rag
+    A->>O: 记录 request_id 与开始时间
+    A->>R: 调用应用服务
+    R->>M: 生成问题 Embedding / Chat
+    R->>V: 检索向量或调用工具
+    V-->>R: 候选 Chunk / Tool Result
+    R->>M: Rerank 或最终回答
+    M-->>R: Answer + Token Usage
+    R-->>A: 领域结果
+    A->>O: Prompt/Response/Token/Latency/Trace
+    A-->>C: Answer + observability
+```
 
 ## 规划目录
 
@@ -590,6 +691,48 @@ FastAPI 自动生成 OpenAPI Schema 和 Swagger UI，默认地址为 `/openapi.j
 输出事件。生产演进时可以实现同一个 `ObservabilityRecorder` 协议，把事件写入
 OpenTelemetry、Prometheus、ELK、LangSmith 或云厂商日志服务。
 
+### Docker 与部署设计
+
+项目提供 [Dockerfile](Dockerfile)、[docker-compose.yml](docker-compose.yml)
+和 [.dockerignore](.dockerignore)。镜像使用 `python:3.13-slim`，通过 uv 根据
+`uv.lock` 安装冻结依赖，默认以非 root 用户运行，并暴露 `/health` 作为容器
+健康检查。
+
+Compose 将 `data/`、`logs/`、`milvus/` 挂载为宿主机目录，避免 SQLite、
+日志和 Milvus Lite 数据随容器删除而丢失。生产部署建议把 Milvus Lite 替换为
+远端 Milvus 或 Zilliz Cloud，把日志和观测事件接入集中化平台。
+
+### 性能优化建议
+
+- RAG 召回：建立离线评测集，对 `RAG_INITIAL_TOP_K`、`RAG_FINAL_TOP_K`、
+  Chunk Size、Overlap 和 Embedding 维度做网格评测。
+- 向量库：本地小数据使用 Milvus Lite；生产大数据切换 HNSW/IVF 等 ANN 索引，
+  并按部门、租户、时间等 Metadata 过滤缩小候选集。
+- Rerank 成本：只对召回候选做精排；对高频问题可缓存 query embedding 和最终
+  RAG 结果。
+- LLM 调用：按业务场景区分模型，大问题用 `qwen-plus`，低风险分类/摘要可用
+  更轻模型；设置合理 `max_tokens` 和超时。
+- Agent 工具：限制最大工具次数、结果长度和工具超时；可对 Search 和 Weather
+  增加短 TTL 缓存。
+- API 并发：生产使用多 worker 或容器横向扩展；外部模型和向量库要设置连接池、
+  限流和熔断。
+- 可观测性：以 request_id 串联 API、RAG、LLM、Tool、Workflow 节点耗时，优先
+  优化 p95/p99 延迟最大的节点。
+
+### 后续扩展方向
+
+- 多租户：增加 tenant_id、权限过滤、部门级知识库隔离和审计日志。
+- 文档处理：接入 OCR、表格解析、图片理解和增量同步企业网盘/知识库。
+- 评测体系：加入 RAGAS 或自研评测集，持续评估召回率、忠实度、引用准确率和
+  拒答率。
+- 人工审核：在 LangGraph Reviewer 后增加 human-in-the-loop 节点，用于高风险
+  答案审批。
+- 持久 Memory：将当前进程内 Memory 升级为会话级数据库存储，并实现摘要压缩。
+- 观测平台：把 `ObservabilityRecorder` 接入 OpenTelemetry、Prometheus、ELK
+  或 LangSmith。
+- 安全增强：API 鉴权、限流、敏感词脱敏、Prompt Injection 检测、工具级权限和
+  数据访问审计。
+
 ## Git 管理规划
 
 采用小步提交和 Conventional Commits：
@@ -731,8 +874,17 @@ Phase 10 已完成：
 - API 响应统一返回 `observability` 摘要，便于本地 Demo 和问题排查。
 - 完成 API 端点、OpenAPI、错误观测和配置项的离线单元测试。
 
-下一阶段是 Phase 11：项目收尾，包括架构图、流程图、Docker、部署说明、性能
-优化建议、简历描述、项目亮点和面试讲解材料。
+Phase 11 已完成：
+
+- 完善 README，补充架构图、RAG 流程图、Agent 流程图、LangGraph 工作流图和
+  API 时序图。
+- 新增 Dockerfile、Docker Compose 和 `.dockerignore`。
+- 新增部署说明文档，覆盖本地、Docker、Compose、配置、运维和回滚。
+- 新增项目总结与面试材料，包含简历描述、项目亮点、讲解稿和高频面试问题。
+- 补充性能优化建议和后续扩展方向。
+
+项目 0 到 1 的主体阶段已完成。后续可以围绕真实业务数据继续做评测、权限、
+多租户、生产观测和云部署增强。
 
 ## 参考资料
 

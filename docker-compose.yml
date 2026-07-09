@@ -1,0 +1,21 @@
+services:
+  ai-assistant:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: enterprise-ai-assistant:latest
+    env_file:
+      - .env
+    environment:
+      APP_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      MILVUS_URI: /app/milvus/knowledge.db
+      DATABASE_PATH: /app/data/assistant.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./milvus:/app/milvus
+    restart: unless-stopped
