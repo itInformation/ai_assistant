@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 9 — LangGraph 基础版与进阶版工作流已完成
+> 当前进度：Phase 10 — FastAPI 服务化与基础可观测性已完成
 
 ## 快速开始
 
@@ -98,6 +98,39 @@ CLI 会打印 `Checkpoint`、每个 `Node` 的摘要和 `Final Answer`。Checkpo
 使用 LangGraph 内存 Checkpointer 和 thread_id 记录单次图状态；生产环境可替换
 为 Postgres 或 SQLite Checkpointer。
 
+启动 FastAPI 服务并打开 Swagger：
+
+```bash
+uv run ai-assistant serve
+# 浏览器访问 http://127.0.0.1:8000/docs
+```
+
+核心 REST API：
+
+```bash
+curl http://127.0.0.1:8000/health
+
+curl -X POST http://127.0.0.1:8000/api/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"用三句话介绍 RAG"}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/rag \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"员工年假如何申请？"}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/agent \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"请查询北京天气，并判断是否适合散步。"}'
+
+curl -X POST http://127.0.0.1:8000/api/v1/workflow \
+  -H 'Content-Type: application/json' \
+  -d '{"mode":"basic","question":"员工年假如何申请？"}'
+```
+
+每个 AI 端点都会返回 `observability` 字段，包含 `request_id`、`latency_ms`、
+`token_usage` 和安全的 `tool_trace` 摘要。服务端同时输出结构化日志，记录
+Prompt/Response 预览、Token Usage、Tool Trace、Error 和 Latency。
+
 常用质量检查命令：
 
 ```bash
@@ -169,6 +202,14 @@ uv run pytest
 | --- | --- | --- |
 | `WORKFLOW_RETRIEVAL_TOP_K` | `5` | LangGraph Retriever 节点召回数量 |
 | `WORKFLOW_MAX_ANSWER_TOKENS` | `1200` | Answer/Summary 节点最大输出 Token 数 |
+
+### API 与可观测性配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `API_HOST` | `127.0.0.1` | FastAPI 服务监听地址 |
+| `API_PORT` | `8000` | FastAPI 服务监听端口 |
+| `OBSERVABILITY_PREVIEW_CHARS` | `800` | 日志中 Prompt/Response 预览字符上限 |
 
 ## 项目目标
 
@@ -516,6 +557,39 @@ START → Supervisor → Research Agent → Tool Agent → Summary Agent → END
 提供。这样图不会直接绑定 DashScope、Milvus 或具体工具实现，未来切换供应商或
 增加分支只影响适配器或节点，不破坏整体架构。
 
+### API 与可观测性设计
+
+Phase 10 把 CLI 能力服务化为 FastAPI 应用。`create_app()` 是应用工厂，内部
+使用 `ApiContainer` 延迟创建真实服务；单元测试和后续生产部署可以注入 Fake
+或外部托管实例。当前暴露的 REST 端点包括：
+
+- `GET /health`：本地健康检查，不访问外部模型或数据库。
+- `POST /api/v1/chat`：直接调用百炼聊天模型。
+- `POST /api/v1/rag`：执行知识库检索、Rerank 和 grounded answer。
+- `POST /api/v1/agent`：执行 ReAct Agent，并返回公开 Tool Trace。
+- `POST /api/v1/workflow`：执行 basic 或 advanced LangGraph 工作流。
+
+FastAPI 自动生成 OpenAPI Schema 和 Swagger UI，默认地址为 `/openapi.json` 与
+`/docs`。这对后端工程很友好：就像 Java 里的 SpringDoc/OpenAPI，接口契约、
+调试页面和客户端生成都可以围绕同一份 Schema 建立。
+
+可观测性采用“端点返回摘要 + 服务端结构化日志”的双层设计：
+
+- Prompt Logging：只记录受 `OBSERVABILITY_PREVIEW_CHARS` 限制的 Prompt 预览，
+  避免把大段企业文档或敏感输入完整写入日志。
+- Response Logging：记录回答预览，便于排查模型是否偏题或拒答。
+- Token Usage：Chat、RAG 和 Agent 会把模型返回或聚合的 Token Usage 放入响应
+  和日志。
+- Tool Trace：Agent 与 Workflow 返回工具名、参数和 Observation 摘要，不暴露
+  隐藏思维链。
+- Error Log：业务异常统一返回 `500 API operation failed`，详细异常类型和信息
+  进入服务端结构化日志，避免把 provider 细节直接暴露给调用方。
+- Latency：中间件记录 HTTP 级耗时，端点观测事件记录 AI 操作级耗时。
+
+`InMemoryObservabilityRecorder` 目前用于本地 Demo 和测试，同时用 structlog
+输出事件。生产演进时可以实现同一个 `ObservabilityRecorder` 协议，把事件写入
+OpenTelemetry、Prometheus、ELK、LangSmith 或云厂商日志服务。
+
 ## Git 管理规划
 
 采用小步提交和 Conventional Commits：
@@ -645,8 +719,20 @@ Phase 9 已完成：
 - 新增 `workflow` CLI Demo，打印 Checkpoint、Node 摘要和 Final Answer。
 - 完成工作流服务和 CLI 的离线单元测试。
 
-下一阶段是 Phase 10：FastAPI 服务与 Prompt、Response、Tool Calling、Latency、
-Token Usage、Error Log 等完整可观测性。
+Phase 10 已完成：
+
+- 引入 FastAPI 与 Uvicorn，提供 `ai-assistant serve` 服务启动命令。
+- 实现 `/health`、`/api/v1/chat`、`/api/v1/rag`、`/api/v1/agent`、
+  `/api/v1/workflow` REST API。
+- 通过 FastAPI 自动暴露 OpenAPI Schema 和 Swagger UI。
+- 新增 API 服务容器，复用现有 Chat、RAG、Agent、LangGraph Workflow 能力。
+- 新增 Observability 事件模型和 Recorder，记录 Prompt/Response 预览、Token
+  Usage、Tool Trace、Error Log 和 Latency。
+- API 响应统一返回 `observability` 摘要，便于本地 Demo 和问题排查。
+- 完成 API 端点、OpenAPI、错误观测和配置项的离线单元测试。
+
+下一阶段是 Phase 11：项目收尾，包括架构图、流程图、Docker、部署说明、性能
+优化建议、简历描述、项目亮点和面试讲解材料。
 
 ## 参考资料
 
@@ -667,3 +753,4 @@ Token Usage、Error Log 等完整可观测性。
 - [百炼 OpenAI-compatible Chat API](https://help.aliyun.com/zh/model-studio/qwen-api-via-openai-chat-completions)
 - [LangGraph Graph API 文档](https://docs.langchain.com/oss/python/langgraph/graph-api)
 - [LangGraph Persistence / Checkpoint 文档](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [FastAPI 官方文档](https://fastapi.tiangolo.com/)

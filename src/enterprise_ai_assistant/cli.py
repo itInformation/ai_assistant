@@ -140,6 +140,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="basic=Planner/Retriever/Tool/Reviewer/Answer; advanced=多 Agent 编排",
     )
     workflow_parser.add_argument("question", help="需要工作流回答的问题")
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="启动 Phase 10 FastAPI 服务",
+    )
+    serve_parser.add_argument("--host", default=None, help="监听地址")
+    serve_parser.add_argument("--port", type=int, default=None, help="监听端口")
+    serve_parser.add_argument(
+        "--reload",
+        action="store_true",
+        help="开发模式下自动重载",
+    )
     return parser
 
 
@@ -533,6 +544,25 @@ async def run_workflow_demo(
     print(f"Final Answer: {result.answer}")
 
 
+def run_api_server(
+    settings: Settings,
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    reload: bool = False,
+) -> None:
+    """Start the Phase 10 FastAPI application with Swagger enabled."""
+
+    import uvicorn
+
+    uvicorn.run(
+        "enterprise_ai_assistant.api.app:app",
+        host=host or settings.api_host,
+        port=port or settings.api_port,
+        reload=reload,
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -614,6 +644,14 @@ def main(argv: Sequence[str] | None = None) -> None:
         return
     if args.command == "workflow":
         asyncio.run(run_workflow_demo(settings, args.mode, args.question))
+        return
+    if args.command == "serve":
+        run_api_server(
+            settings,
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+        )
         return
 
     result = run_demo(settings)

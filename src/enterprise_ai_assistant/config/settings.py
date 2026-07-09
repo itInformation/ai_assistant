@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     workflow_retrieval_top_k: int = Field(default=5, ge=1, le=20)
     workflow_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
 
+    api_host: str = "127.0.0.1"
+    api_port: int = Field(default=8000, ge=1, le=65_535)
+    observability_preview_chars: int = Field(default=800, ge=50, le=5_000)
+
     @model_validator(mode="after")
     def validate_rag_settings(self) -> "Settings":
         """Validate relationships between RAG tuning parameters."""

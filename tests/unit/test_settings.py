@@ -31,6 +31,10 @@ def test_settings_have_safe_defaults(monkeypatch: object) -> None:
     assert settings.database_max_rows == 100
     assert settings.agent_max_tool_calls == 5
     assert settings.agent_memory_turns == 6
+    assert settings.workflow_retrieval_top_k == 5
+    assert settings.api_host == "127.0.0.1"
+    assert settings.api_port == 8000
+    assert settings.observability_preview_chars == 800
 
 
 def test_settings_read_environment(monkeypatch: object) -> None:

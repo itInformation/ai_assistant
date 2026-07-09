@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import sys
 from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
+from types import SimpleNamespace
 
 from enterprise_ai_assistant import cli
 from enterprise_ai_assistant.config import Settings
@@ -552,3 +554,32 @@ def test_run_workflow_demo_prints_langgraph_trace(capsys: object) -> None:
     assert "Node: planner" in output
     assert "Node: answer" in output
     assert "Final Answer: 北京适合散步。" in output
+
+
+def test_run_api_server_passes_settings_to_uvicorn(monkeypatch: object) -> None:
+    """Serve command should delegate host and port to Uvicorn."""
+
+    calls: list[dict[str, object]] = []
+
+    def fake_run(app_path: str, **kwargs: object) -> None:
+        calls.append({"app_path": app_path, **kwargs})
+
+    monkeypatch.setitem(  # type: ignore[attr-defined]
+        sys.modules,
+        "uvicorn",
+        SimpleNamespace(run=fake_run),
+    )
+
+    cli.run_api_server(
+        Settings(_env_file=None, api_host="0.0.0.0", api_port=9000),
+        reload=True,
+    )
+
+    assert calls == [
+        {
+            "app_path": "enterprise_ai_assistant.api.app:app",
+            "host": "0.0.0.0",
+            "port": 9000,
+            "reload": True,
+        }
+    ]
