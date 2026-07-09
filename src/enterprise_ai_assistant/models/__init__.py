@@ -25,6 +25,7 @@ from enterprise_ai_assistant.models.rag import (
     RerankResponse,
     RetrievalCandidate,
 )
+from enterprise_ai_assistant.models.tool import ToolResult, ToolSpec
 from enterprise_ai_assistant.models.vectorstore import (
     JSONValue,
     VectorDeleteResult,
@@ -53,6 +54,8 @@ __all__ = [
     "RetrievalCandidate",
     "TextChunk",
     "TokenUsage",
+    "ToolResult",
+    "ToolSpec",
     "VectorDeleteResult",
     "VectorInsertResult",
     "VectorRecord",

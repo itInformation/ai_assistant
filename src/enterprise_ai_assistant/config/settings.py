@@ -55,6 +55,14 @@ class Settings(BaseSettings):
     rag_max_answer_tokens: int = Field(default=1_200, ge=100, le=8_000)
     rag_max_file_size_mb: int = Field(default=20, ge=1, le=100)
 
+    tavily_api_key: str | None = Field(default=None, repr=False)
+    tool_http_timeout_seconds: float = Field(default=10.0, gt=0)
+    tool_max_retries: int = Field(default=2, ge=0, le=10)
+    search_max_content_chars: int = Field(default=1_500, ge=100, le=10_000)
+    database_path: str = "data/assistant.db"
+    database_max_rows: int = Field(default=100, ge=1, le=1_000)
+    database_timeout_seconds: float = Field(default=5.0, gt=0)
+
     @model_validator(mode="after")
     def validate_rag_settings(self) -> "Settings":
         """Validate relationships between RAG tuning parameters."""

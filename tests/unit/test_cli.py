@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Mapping, Sequence
 from pathlib import Path
 
 from enterprise_ai_assistant import cli
@@ -13,16 +13,20 @@ from enterprise_ai_assistant.models import (
     ChatResponse,
     EmbeddingResponse,
     EmbeddingUsage,
+    JSONValue,
     RerankItem,
     RerankResponse,
     ResponseFormat,
     RetrievalCandidate,
+    ToolResult,
+    ToolSpec,
     VectorDeleteResult,
     VectorInsertResult,
     VectorRecord,
     VectorSearchFilter,
     VectorSearchResult,
 )
+from enterprise_ai_assistant.tools import ToolRegistry
 
 
 class FakeChatModel:
@@ -165,6 +169,25 @@ class FakeReranker:
 
     async def close(self) -> None:
         """Satisfy the reranker lifecycle."""
+
+
+class FakeTool:
+    """Deterministic tool used by CLI tests."""
+
+    spec = ToolSpec(
+        name="weather",
+        description="Fake weather.",
+        parameters={"type": "object", "properties": {}},
+    )
+
+    async def invoke(
+        self,
+        arguments: Mapping[str, JSONValue],
+    ) -> ToolResult:
+        return ToolResult("weather", "晴", dict(arguments))
+
+    async def close(self) -> None:
+        """Satisfy the tool lifecycle."""
 
 
 def test_main_prints_structured_application_info(
@@ -376,3 +399,33 @@ def test_run_rag_demo_returns_sources(capsys: object) -> None:
     output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
     assert output["retrieved_count"] == 1
     assert output["sources"][0]["source"] == "manual.md"
+
+
+def test_run_tool_demo_dispatches_json_arguments(capsys: object) -> None:
+    """Tool Demo should parse JSON and invoke the Registry allow-list."""
+
+    asyncio.run(
+        cli.run_tool_demo(
+            Settings(_env_file=None),
+            "weather",
+            '{"location":"北京"}',
+            registry=ToolRegistry([FakeTool()]),
+        )
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["tool_name"] == "weather"
+    assert output["data"] == {"location": "北京"}
+
+
+def test_list_tools_prints_json_schema(capsys: object) -> None:
+    """Tool discovery should expose the registered contract."""
+
+    cli.list_tools(
+        Settings(_env_file=None),
+        registry=ToolRegistry([FakeTool()]),
+    )
+
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output[0]["name"] == "weather"
+    assert output[0]["parameters"]["type"] == "object"

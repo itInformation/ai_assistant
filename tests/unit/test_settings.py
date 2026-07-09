@@ -26,6 +26,9 @@ def test_settings_have_safe_defaults(monkeypatch: object) -> None:
     assert settings.rag_chunk_overlap == 120
     assert settings.rag_initial_top_k == 20
     assert settings.rag_final_top_k == 5
+    assert settings.tavily_api_key is None
+    assert settings.database_path == "data/assistant.db"
+    assert settings.database_max_rows == 100
 
 
 def test_settings_read_environment(monkeypatch: object) -> None:

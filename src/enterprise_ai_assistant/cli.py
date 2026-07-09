@@ -42,6 +42,7 @@ from enterprise_ai_assistant.rerank import (
     Reranker,
     create_dashscope_reranker,
 )
+from enterprise_ai_assistant.tools import ToolRegistry, create_tool_registry
 from enterprise_ai_assistant.vectorstore import (
     VectorStore,
     create_milvus_vector_store,
@@ -100,6 +101,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="检索、精排并回答企业知识问题",
     )
     rag_parser.add_argument("question", help="需要从知识库回答的问题")
+    subparsers.add_parser("tools", help="列出已注册工具及其输入 Schema")
+    tool_parser = subparsers.add_parser(
+        "tool",
+        help="通过 Registry 调用指定工具",
+    )
+    tool_parser.add_argument("name", choices=("weather", "search", "database"))
+    tool_parser.add_argument(
+        "arguments",
+        help='JSON 对象, 例如 \'{"location":"北京"}\'',
+    )
     return parser
 
 
@@ -348,6 +359,50 @@ async def run_rag_demo(
     print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
 
 
+async def run_tool_demo(
+    settings: Settings,
+    name: str,
+    arguments_json: str,
+    *,
+    registry: ToolRegistry | None = None,
+) -> None:
+    """Invoke one Phase 7 tool through the shared registry."""
+
+    try:
+        arguments = json.loads(arguments_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError("tool arguments must be valid JSON") from exc
+    if not isinstance(arguments, dict):
+        raise ValueError("tool arguments must be a JSON object")
+
+    tool_registry = registry or create_tool_registry(settings)
+    try:
+        result = await tool_registry.invoke(name, arguments)
+    finally:
+        if registry is None:
+            await tool_registry.close()
+    print(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+
+
+def list_tools(
+    settings: Settings,
+    *,
+    registry: ToolRegistry | None = None,
+) -> None:
+    """Print registered tool contracts without invoking external providers."""
+
+    tool_registry = registry or create_tool_registry(settings)
+    print(
+        json.dumps(
+            [asdict(spec) for spec in tool_registry.specs()],
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    if registry is None:
+        asyncio.run(tool_registry.close())
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     """Load configuration and run the requested local demo."""
 
@@ -404,6 +459,18 @@ def main(argv: Sequence[str] | None = None) -> None:
             run_rag_demo(
                 settings,
                 args.question,
+            )
+        )
+        return
+    if args.command == "tools":
+        list_tools(settings)
+        return
+    if args.command == "tool":
+        asyncio.run(
+            run_tool_demo(
+                settings,
+                args.name,
+                args.arguments,
             )
         )
         return

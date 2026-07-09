@@ -2,7 +2,7 @@
 
 一个面向企业知识检索与智能问答场景的 AI Agent 项目。项目以阿里云百炼大模型为默认模型服务，围绕 Prompt Engineering、RAG、Tool Calling、ReAct Agent、LangGraph 工作流和可观测性构建，并采用可替换的接口设计支持后续生产化演进。
 
-> 当前进度：Phase 6 — 文档摄取与完整 RAG 链路已完成
+> 当前进度：Phase 7 — Tool 抽象、Registry 与三个业务工具已完成
 
 ## 快速开始
 
@@ -62,6 +62,19 @@ uv run ai-assistant rag "员工年假如何申请？"
 摄取同一路径的新版文档时，会以稳定的 `document_id` 替换其旧 Chunk，避免重复
 召回。PDF 当前支持包含文本层的文件；扫描件需要先经过 OCR。
 
+查看工具的 JSON Schema，并通过 Registry 调用 Weather、Search 或 Database：
+
+```bash
+uv run ai-assistant tools
+uv run ai-assistant tool weather '{"location":"北京","forecast_days":3}'
+uv run ai-assistant tool search '{"query":"AI Agent 最新工程实践","max_results":5}'
+uv run ai-assistant tool database \
+  '{"query":"SELECT id, name FROM employees WHERE department = ?","parameters":["研发"]}'
+```
+
+Search 需要在 `.env` 配置 `TAVILY_API_KEY`；Database 只读取
+`DATABASE_PATH` 指向的现有 SQLite 文件，不会自动创建数据库。
+
 常用质量检查命令：
 
 ```bash
@@ -104,6 +117,18 @@ uv run pytest
 | `RAG_MAX_CONTEXT_CHARS` | `8000` | 交给 LLM 的上下文字符上限 |
 | `RAG_MAX_ANSWER_TOKENS` | `1200` | 回答最大 Token 数 |
 | `RAG_MAX_FILE_SIZE_MB` | `20` | 单个摄取文件大小上限 |
+
+### Tool 配置
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `TAVILY_API_KEY` | 无 | Tavily Search API Key |
+| `TOOL_HTTP_TIMEOUT_SECONDS` | `10` | Weather/Search 单次 HTTP 超时秒数 |
+| `TOOL_MAX_RETRIES` | `2` | 可重试 HTTP 错误的最大额外尝试次数 |
+| `SEARCH_MAX_CONTENT_CHARS` | `1500` | 每条搜索摘要的字符上限 |
+| `DATABASE_PATH` | `data/assistant.db` | 只读 SQLite 数据库文件 |
+| `DATABASE_MAX_ROWS` | `100` | 单次查询最大返回行数 |
+| `DATABASE_TIMEOUT_SECONDS` | `5` | SQLite 锁等待超时秒数 |
 
 ## 项目目标
 
@@ -365,6 +390,30 @@ v3 的检索效果最好，适合作为首版准确率基线；维度越高，Mi
 
 LLM、Embedding、VectorStore、Reranker 和 Tool 都定义稳定协议。DashScope 与 Milvus 作为适配器实现，业务层只依赖协议，后续切换 OpenAI、DeepSeek、Claude 或其他向量库时无需重写核心流程。
 
+### Tool 抽象与安全边界
+
+Tool 抽象把“模型或业务想做什么”与“外部系统怎样执行”隔开。每个工具都通过
+统一 `Tool` 协议暴露 `ToolSpec` 和异步 `invoke`：`ToolSpec` 包含稳定名称、
+用途描述和 JSON Schema，未来可以直接转换为百炼 Tool Calling 定义；
+`ToolResult` 则统一返回给 Agent 的文本摘要、结构化数据和 Metadata。这样替换
+天气、搜索或数据库供应商时，Registry 和 Agent 不需要跟着修改。
+
+`ToolRegistry` 既是注册中心，也是显式允许列表：重复名称会失败，未知名称不会
+被动态导入或执行。三个工具进一步使用不同的防护：
+
+- Weather：先用 Open-Meteo Geocoding 把城市解析成坐标，再查询最多 7 天预报；
+  对超时、限流和服务端错误进行有限指数退避。
+- Search：使用 Tavily，关闭原始网页全文和供应商生成答案，只保留最多 10 条、
+  每条受字符上限约束的标题、URL、摘要和分数，防止结果撑爆 Agent 上下文。
+- Database：仅允许单条 `SELECT` 或只读 `WITH`，必须参数化传值；SQLite 同时以
+  URI `mode=ro` 和 `PRAGMA query_only` 打开，拒绝 PRAGMA、DDL、DML、ATTACH
+  与多语句，并限制最大返回行数。当前通用 SQL 入口面向受信任应用和本地 CLI；
+  Phase 8 暴露给模型前还会包一层预定义查询模板，让模型只填充查询参数。
+
+Phase 7 的 CLI Demo 由用户显式选择工具，目的是独立验证工具执行层。Phase 8
+再接入百炼 Tool Calling，让模型在 Registry 允许范围内完成选择、参数生成、
+Observation 和最终回答，避免在这一阶段把执行层与 Agent 推理耦合起来。
+
 ## Git 管理规划
 
 采用小步提交和 Conventional Commits：
@@ -458,7 +507,17 @@ Phase 6 已完成：
   Markdown 到 Milvus Lite 再到回答的离线集成测试。
 - 通过真实百炼 Embedding、Rerank、Qwen 与持久化 Milvus Lite 完成端到端验证。
 
-下一阶段是 Phase 7：工具抽象、注册中心及 Weather、Search、Database 工具。
+Phase 7 已完成：
+
+- 定义供应商无关的 `Tool` 协议、`ToolSpec`、`ToolResult` 和稳定异常体系。
+- 实现显式允许列表 `ToolRegistry`、重复注册保护、工具发现和统一异步分发。
+- 实现 Open-Meteo Weather Tool，支持中文地点解析、当前天气和 1 至 7 天预报。
+- 实现 Tavily Search Tool，支持强类型参数、有限重试和结果数量/内容长度控制。
+- 实现参数化只读 SQLite Database Tool，使用双重只读、SQL 白名单和行数上限。
+- 提供 `tools` 与 `tool` CLI Demo，并完成真实 Weather 调用和离线工具测试。
+
+下一阶段是 Phase 8：ReAct、Memory、Planning、Tool Calling、Observation
+和 Final Answer Agent。
 
 ## 参考资料
 
@@ -470,3 +529,8 @@ Phase 6 已完成：
 - [Milvus Lite 官方文档](https://milvus.io/docs/milvus_lite.md)
 - [Milvus JSON Field 官方文档](https://milvus.io/docs/use-json-fields.md)
 - [pypdf 文本提取文档](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)
+- [Open-Meteo Forecast API 文档](https://open-meteo.com/en/docs)
+- [Open-Meteo Geocoding API 文档](https://open-meteo.com/en/docs/geocoding-api)
+- [Tavily Search API 文档](https://docs.tavily.com/documentation/api-reference/endpoint/search)
+- [SQLite URI 文件名文档](https://www.sqlite.org/uri.html)
+- [SQLite query_only 文档](https://www.sqlite.org/pragma.html#pragma_query_only)
