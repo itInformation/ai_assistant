@@ -27,3 +27,15 @@ def test_settings_read_environment(monkeypatch: object) -> None:
 
     assert settings.app_env == "testing"
     assert settings.debug is True
+
+
+def test_settings_support_legacy_dashscope_model_name(
+    monkeypatch: object,
+) -> None:
+    """Existing DASHSCOPE_MODEL files should configure the chat adapter."""
+
+    monkeypatch.setenv("DASHSCOPE_MODEL", "qwen-turbo")  # type: ignore[attr-defined]
+
+    settings = Settings(_env_file=None)
+
+    assert settings.dashscope_chat_model == "qwen-turbo"

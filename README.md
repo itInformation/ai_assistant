@@ -47,7 +47,7 @@ uv run pytest
 | --- | --- | --- |
 | `DASHSCOPE_API_KEY` | 无 | 百炼 API Key，聊天调用必填 |
 | `DASHSCOPE_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 百炼 OpenAI-compatible API 地址 |
-| `DASHSCOPE_CHAT_MODEL` | `qwen-plus` | 默认聊天模型 |
+| `DASHSCOPE_CHAT_MODEL` | `qwen-plus` | 默认聊天模型；兼容已有的 `DASHSCOPE_MODEL` |
 | `DASHSCOPE_TIMEOUT_SECONDS` | `30` | 单次请求超时秒数 |
 | `DASHSCOPE_MAX_RETRIES` | `2` | 首次调用之外的最大重试次数 |
 

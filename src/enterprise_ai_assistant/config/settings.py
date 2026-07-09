@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,7 +25,13 @@ class Settings(BaseSettings):
 
     dashscope_api_key: str | None = Field(default=None, repr=False)
     dashscope_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    dashscope_chat_model: str = "qwen-plus"
+    dashscope_chat_model: str = Field(
+        default="qwen-plus",
+        validation_alias=AliasChoices(
+            "DASHSCOPE_CHAT_MODEL",
+            "DASHSCOPE_MODEL",
+        ),
+    )
     dashscope_embedding_model: str = "text-embedding-v3"
     dashscope_timeout_seconds: float = Field(default=30.0, gt=0)
     dashscope_max_retries: int = Field(default=2, ge=0, le=10)

@@ -64,6 +64,8 @@ class DashScopeChatModel:
             api_key=api_key,
             base_url=base_url,
             timeout=timeout_seconds,
+            # Tenacity owns the retry policy so one failure cannot trigger
+            # nested SDK retries and unexpectedly multiply request latency.
             max_retries=0,
         )
         self._logger = get_logger(provider="dashscope", model=model)
@@ -121,7 +123,10 @@ class DashScopeChatModel:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+            # Only connection establishment is retried. Once a chunk has been
+            # emitted, replaying the request could duplicate visible content.
             async for item in stream:
+                # Usage-only terminal chunks can legitimately contain no choice.
                 if not isinstance(item, ChatCompletionChunk) or not item.choices:
                     continue
                 choice = item.choices[0]
@@ -161,6 +166,7 @@ class DashScopeChatModel:
             request["stream_options"] = {"include_usage": True}
 
         retrying = AsyncRetrying(
+            # max_retries excludes the first request, hence the extra attempt.
             stop=stop_after_attempt(self._max_retries + 1),
             wait=wait_exponential(multiplier=0.5, min=0.5, max=4),
             retry=retry_if_exception_type(_RETRYABLE_ERRORS),
